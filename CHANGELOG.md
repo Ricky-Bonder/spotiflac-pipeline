@@ -10,11 +10,36 @@ not a per-day snapshot.
 
 ## [Unreleased]
 
-- Validate spotiflac 1.0.0 (rewritten `link_resolver.py`, multi-provider Go-
-  style implementation). Likely makes our `link_resolver.py` patch
-  unnecessary; needs testing against the live provider chain before changing
-  the pin in `install.sh`.
-- Ongoing polish: tests, Docker example, Discord notifier, web status page.
+- Tests, Docker example, Discord notifier, web status page.
+
+## [0.2.0] — 2026-06-08
+
+### Changed
+
+- **Default spotiflac pin moved to `>=0.6.9,<0.9`** (was `>=0.5.1,<0.6`).
+  0.6.9 is the first upstream release with the rewritten `link_resolver.py`
+  that doesn't need our patch. Validated end-to-end against 0.8.4 on a real
+  Spotify track.
+- `install.sh` simplified: dropped the patch-application step and the `patch`
+  host-dep check. One fewer thing to go wrong, ~25 fewer lines of bash.
+
+### Documented
+
+- `patches/README.md`: marked as legacy / historical. Includes manual-apply
+  instructions for anyone deliberately pinning to the 0.5.x line.
+- Findings on intermediate upstream versions: 0.5.x has the Odesli `?id=&
+  platform=` bug; 0.6.0 still broken; 0.6.9+ fixed; 0.8.9+ restructured to
+  `backend.launcher`; **1.0.0's PyPI wheel is broken** (empty
+  `top_level.txt`, missing `backend/` module — published the same day this
+  validation ran). Reported upstream nowhere yet — feels like a slipped
+  packaging step that the author will likely fix soon.
+
+### Why now
+
+The original CHANGELOG flagged this as *Unreleased* validation work. The
+upstream landscape is moving fast (35+ releases between 0.5.1 and 1.0.0
+across ~3 weeks), and a one-line `install.sh` pin bump is materially
+simpler than maintaining our own patch indefinitely.
 
 ## [0.1.0] — 2026-06-08
 

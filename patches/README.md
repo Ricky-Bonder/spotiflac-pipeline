@@ -1,43 +1,43 @@
-# patches/
+# patches/ — historical
+
+> This patch is **legacy**. The current `install.sh` pins spotiflac to
+> `>=0.6.9,<0.9`, which has a rewritten `link_resolver.py` that no longer
+> exhibits the bug fixed below. Kept here as a historical artifact and a
+> reference for anyone running pinned to the 0.5.x line.
 
 ## `spotiflac-0.5.1-link-resolver.patch`
 
-Patches `SpotiFLAC/core/link_resolver.py` in the spotiflac 0.5.1 package.
+Patches `SpotiFLAC/core/link_resolver.py` in **spotiflac 0.5.x**.
 
 ### What it fixes
 
-Upstream calls Odesli (api.song.link) with `?id=<raw_id>&platform=<platform>`,
-which Odesli deprecated. As of mid-2026 that form returns `HTTP 400
-invalid_entity_type` and resolution fails for every track. The patch rebuilds a
-canonical track URL per platform and submits it via `?url=…` instead — the form
-Odesli still supports.
+Upstream called Odesli (api.song.link) with `?id=<raw_id>&platform=<platform>`,
+which Odesli deprecated in 2026. The call returns `HTTP 400
+invalid_entity_type` and every resolution attempt fails. The patch rebuilds a
+canonical track URL per platform and submits it via `?url=…` instead — the
+form Odesli still supports.
 
-### Apply
+### Why it's no longer applied automatically
 
-`install.sh` applies it automatically once the venv is built. To apply manually:
+The author of spotiflac released 0.6.9 with a complete rewrite of
+`link_resolver.py` (multi-provider Go-style implementation with direct
+Deezer ISRC API calls, Amazon URL normalization, etc.). The HTTP 400 bug
+went away as a side-effect of that rewrite. `install.sh` no longer applies
+this patch — it just installs from the post-rewrite version range directly.
+
+### Apply manually (only if you have a reason to pin to 0.5.x)
 
 ```bash
-SITE=$($SPOTIFLAC_VENV/bin/python3 -c \
-  "import SpotiFLAC, os; print(os.path.dirname(SpotiFLAC.__file__))")
-cd "$(dirname "$SITE")"
+pip install "spotiflac>=0.5.1,<0.6"
+SITE=$(python -c "import SpotiFLAC, os; print(os.path.dirname(os.path.dirname(SpotiFLAC.__file__)))")
+cd "$SITE"
 patch -p1 < /path/to/patches/spotiflac-0.5.1-link-resolver.patch
 ```
 
-### Upstream status
+### Reasons you might want to pin to 0.5.x anyway
 
-Upstream has since released **spotiflac 1.0.0** with a completely rewritten
-`link_resolver.py` (multi-provider Go-style implementation with Deezer ISRC
-lookup, Amazon URL normalization, etc.). The bug fixed by this patch is
-resolved as a side-effect of that rewrite — meaning this patch is **only
-relevant for users pinned to spotiflac 0.5.x**.
-
-`install.sh` currently pins to `spotiflac>=0.5.1,<0.6` for reproducibility
-with the library this project was built against. Migrating to 1.0.0 is on
-the roadmap (see `CHANGELOG.md` under *Unreleased*) but requires testing
-because the 1.0.0 API surface and provider semantics differ.
-
-If you're starting fresh, you can try `pip install "spotiflac>=1.0.0"`
-manually — this patch is then unnecessary and `install.sh` will skip
-applying it (the marker `_PLATFORM_URL_TEMPLATES` won't be present, but the
-patch's `patch --dry-run` check will also fail, and the script logs that
-case).
+- The 0.6.9+ rewrite changed provider semantics (Deezer now via direct ISRC
+  API instead of the `api.zarz.moe` proxy). If you specifically need the
+  zarz.moe path, you want the 0.5.x line.
+- Larger install footprint in 0.7.x+ (pulls in pywebview and other GUI deps,
+  even when you only use the CLI).
