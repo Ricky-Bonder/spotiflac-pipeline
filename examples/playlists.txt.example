@@ -1,0 +1,10 @@
+# One Spotify playlist URL per line. Blank lines and #-comments ignored.
+# spotiflac extracts the playlist ID from the URL, so any of these forms work:
+#   https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
+#   https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abc123
+#
+# Order doesn't matter — the batch driver processes playlists in URL-sort order
+# and tracks completion in $SPOTIFLAC_STATE_DIR/done.txt.
+
+https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
+https://open.spotify.com/playlist/37i9dQZF1E37jmRfNgFn7K

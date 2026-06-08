@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# State / logs / secrets
+*.log
+*.log.old
+spotiflac.env
+secrets/
+*.pem
+*.key
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Pulled upstream archives (used only at build/test time)
+spotiflac-upstream/

@@ -1,0 +1,18 @@
+# spotiflac-pipeline cron entries. Adapt paths to your install location and
+# add to your user crontab via `crontab -e`.
+#
+# Conventions used below:
+#   ${SPF}   — where you cloned the repo (e.g. ~/spotiflac-pipeline)
+#   ${ENV}   — the per-user config (~/.config/spotiflac-pipeline/spotiflac.env)
+
+# Watchdog: every 15 min, keep the batch alive until done. Self-disables once
+# the entire playlist set is complete (removes itself from this crontab).
+*/15 * * * * SPOTIFLAC_CONFIG_FILE=${ENV} ${SPF}/bin/spotiflac-watchdog.sh
+
+# Daily 06:00: diff each playlist's Spotify state vs. last-known. Additions
+# trigger a re-download cycle; deletions update M3Us.
+0 6 * * * SPOTIFLAC_CONFIG_FILE=${ENV} ${SPF}/bin/spotify-diff.py >> ~/.local/state/spotiflac-pipeline/diff.log 2>&1
+
+# Weekly Sun 04:00: re-verify every FLAC by duration vs. Spotify's reported
+# duration; delete misroutes and regenerate affected playlists.
+0 4 * * 0 SPOTIFLAC_CONFIG_FILE=${ENV} ${SPF}/bin/verify-and-cleanup.py --clean >> ~/.local/state/spotiflac-pipeline/verify.log 2>&1

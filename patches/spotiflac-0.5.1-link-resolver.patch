@@ -1,0 +1,35 @@
+--- a/SpotiFLAC/core/link_resolver.py
++++ b/SpotiFLAC/core/link_resolver.py
+@@ -11,6 +11,16 @@
+ 
+     API_URL = "https://api.song.link/v1-alpha.1/links"
+ 
++    # PATCH (spotiflac-pipeline): Odesli deprecated the (id, platform) form (returns
++    # HTTP 400 invalid_entity_type). Build a canonical track URL per platform
++    # and pass it via ?url= instead. Keep upstream's rate limiter in resolve_all.
++    _PLATFORM_URL_TEMPLATES = {
++        "spotify":    "https://open.spotify.com/track/{id}",
++        "appleMusic": "https://music.apple.com/song/{id}",
++        "tidal":      "https://tidal.com/browse/track/{id}",
++        "deezer":     "https://www.deezer.com/track/{id}",
++    }
++
+     def __init__(self, http_client: HttpClient):
+         self.http = http_client
+ 
+@@ -43,10 +53,12 @@
+         else:
+             raw_id = track_id.replace("spotify_", "")
+ 
++        template = self._PLATFORM_URL_TEMPLATES.get(
++            platform, self._PLATFORM_URL_TEMPLATES["spotify"]
++        )
+         params = {
+-            "id": raw_id,
+-            "platform": platform,
+-            "userCountry": "US"
++            "url": template.format(id=raw_id),
++            "userCountry": "US",
+         }
+ 
+         links = {}
