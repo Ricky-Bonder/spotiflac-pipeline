@@ -10,7 +10,11 @@ not a per-day snapshot.
 
 ## [Unreleased]
 
-— Ongoing polish: tests, Docker example, Discord notifier, web status page.
+- Validate spotiflac 1.0.0 (rewritten `link_resolver.py`, multi-provider Go-
+  style implementation). Likely makes our `link_resolver.py` patch
+  unnecessary; needs testing against the live provider chain before changing
+  the pin in `install.sh`.
+- Ongoing polish: tests, Docker example, Discord notifier, web status page.
 
 ## [0.1.0] — 2026-06-08
 
@@ -45,6 +49,11 @@ either. The same release continued to call Odesli with the deprecated
 Patched `link_resolver.py` to build a canonical track URL per platform
 and submit it via `?url=` instead — see `patches/spotiflac-0.5.1-
 link-resolver.patch`.
+
+> Upstream has since released spotiflac 1.0.0 with a completely rewritten
+> resolver — this patch is therefore only relevant for the 0.5.x line that
+> this project is currently pinned to. See `patches/README.md` and the
+> *Unreleased* section above.
 
 #### 2026-05-17–05-25 — watchdog + provider rotation
 Authored `spotiflac-watchdog.sh`: a 15 min cron that keeps the batch
