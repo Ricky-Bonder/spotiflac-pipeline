@@ -74,12 +74,31 @@ The shell scripts (`run_all.sh`, `spotiflac-watchdog.sh`) source
 
 ## Tests
 
-Phase 1 ships without a test suite — these are file-and-network-heavy
-scripts and a proper test harness is a Phase-2 item (see `CHANGELOG.md`
-under *Unreleased*). When adding code that handles tricky cases
-(filename normalization, fuzzy matching, dedup priority), include a small
-example in the script's docstring or PR description and use
-`config.example.env` to point the pipeline at a sandbox dir.
+The `tests/` directory holds pytest cases for the pure-logic parts:
+
+- `tests/test_audit_match.py` — `audit-spotdl.py`'s `norm`, `fname_parse`,
+  and `find_match` (filename → playlist-track fuzzy matching)
+- `tests/test_dedup_priority.py` — `dedup-tracks.py`'s `keeper_sort_key`
+  (verified-good > FLAC > MP3 > M4A > bitrate > size)
+
+Run locally:
+
+```bash
+pip install pytest
+pytest tests/ -v
+```
+
+GitHub Actions runs the same suite under Python 3.10 and 3.12 on every push
+and PR — see `.github/workflows/ci.yml`.
+
+The `bin/*.py` files have hyphens in their names (so they're invokable as
+CLI commands), so plain `import` doesn't work. `tests/conftest.py` provides
+`audit` and `dedup` fixtures that load them via `importlib`.
+
+These tests intentionally cover only the pure-logic pieces. Anything that
+touches the filesystem, network, or external binaries (ffprobe, yt-dlp,
+spotiflac) is integration territory and stays out of CI for now. Add an
+integration-test harness when the project grows enough to warrant it.
 
 ## Style
 

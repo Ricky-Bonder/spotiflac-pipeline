@@ -10,7 +10,33 @@ not a per-day snapshot.
 
 ## [Unreleased]
 
-- Tests, Docker example, Discord notifier, web status page.
+- Docker example, Discord notifier, web status page.
+- Re-validate spotiflac 0.9.x to consider bumping the upper pin to `<1.0`.
+- Make `spotify-diff.py` re-install the watchdog cron when it unmarks a
+  playlist — currently a steady-state gap (diff detects additions and
+  unmarks, but nothing automatically picks the work back up).
+
+## [0.3.0] — 2026-06-19
+
+### Added
+
+- **CI on every push + PR**. `.github/workflows/ci.yml` runs `bash -n` on
+  every shell script, `python3 -m py_compile` on every Python script, and
+  the full pytest suite under Python 3.10 + 3.12 in matrix.
+- **`tests/`** with 27 pytest cases:
+  - `test_audit_match.py` — `norm()` edge cases, spotdl filename parsing,
+    and the artist-anywhere + 0.80-fuzzy-title rule
+  - `test_dedup_priority.py` — pins the keeper-selection ordering
+    (verified-good > FLAC > MP3 > M4A > bitrate > size) against
+    refactor regressions
+- README CI badge.
+
+### Changed
+
+- `dedup-tracks.py`: extracted `keeper_sort_key` from inside `main()` to
+  module level so it's unit-testable. Pure refactor, no behavior change.
+- `docs/DEVELOPMENT.md`: rewrote the *Tests* section now that there are
+  actually tests.
 
 ## [0.2.0] — 2026-06-08
 

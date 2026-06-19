@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  syntax:
+    name: Syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bash syntax (bin/*.sh + install.sh)
+        run: |
+          fail=0
+          for f in bin/*.sh install.sh; do
+            if bash -n "$f"; then
+              echo "  ok  $f"
+            else
+              echo "  fail  $f"
+              fail=1
+            fi
+          done
+          exit "$fail"
+
+      - name: Python compile (bin/*.py)
+        run: |
+          fail=0
+          for f in bin/*.py; do
+            if python3 -m py_compile "$f"; then
+              echo "  ok  $f"
+            else
+              echo "  fail  $f"
+              fail=1
+            fi
+          done
+          exit "$fail"
+
+  tests:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run tests
+        run: pytest tests/ -v

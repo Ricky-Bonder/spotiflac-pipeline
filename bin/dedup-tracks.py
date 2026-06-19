@@ -60,6 +60,23 @@ TOLERANCE_PAIR = 3.0
 FUZZY_TITLE = 0.85
 
 
+def keeper_sort_key(f):
+    """Sort key for picking the keeper from a cluster of same-track files.
+
+    Lower is better. Order of preference:
+      1. verified_good (file duration within ±TOLERANCE_VERIFY of Spotify's)
+      2. format rank: flac > mp3 > m4a/aac/ogg/opus
+      3. bitrate: higher
+      4. size: larger
+    """
+    return (
+        0 if f["verified_good"] else 1,
+        -f["format_rank"],
+        -f["bitrate"],
+        -f["size"],
+    )
+
+
 def norm(s):
     if not s:
         return ""
@@ -324,15 +341,7 @@ def main():
                             break
                 break
 
-    # Pick keeper from each cluster
-    def keeper_sort_key(f):
-        return (
-            0 if f["verified_good"] else 1,
-            -f["format_rank"],
-            -f["bitrate"],
-            -f["size"],
-        )
-
+    # Pick keeper from each cluster (uses module-level keeper_sort_key)
     losers = []
     summary = {
         "total_files": len(files),

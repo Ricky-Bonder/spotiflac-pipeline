@@ -1,5 +1,8 @@
 # spotiflac-pipeline
 
+[![CI](https://github.com/Ricky-Bonder/spotiflac-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/Ricky-Bonder/spotiflac-pipeline/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 An opinionated, self-healing pipeline for building a high-quality local music
 library from Spotify playlists — wraps [spotiflac](https://pypi.org/project/spotiflac/)
 and [yt-dlp](https://github.com/yt-dlp/yt-dlp) with a batch driver, a
@@ -10,7 +13,7 @@ Built and battle-tested against a real 43-playlist library (~4 600 tracks,
 ~250 GB FLAC + MP3) on a homelab Navidrome server. The [`CHANGELOG`](CHANGELOG.md)
 documents the ~25 days of iteration that produced this.
 
-> **Personal-use quality, v0.1.** This is shared more as "show your work" than
+> **Personal-use quality, v0.2.** This is shared more as "show your work" than
 > as a polished tool. PRs welcome — see [CONTRIBUTING](docs/DEVELOPMENT.md).
 
 ---
