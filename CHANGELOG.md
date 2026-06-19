@@ -16,6 +16,48 @@ not a per-day snapshot.
   playlist — currently a steady-state gap (diff detects additions and
   unmarks, but nothing automatically picks the work back up).
 
+## [0.4.0] — 2026-06-19
+
+### Added
+
+- **`verify-and-cleanup.py` now covers M4A files** in addition to FLAC.
+  Until now the duration verifier only checked the FLAC outputs from the
+  Deezer/Tidal/Amazon providers — M4As produced by the YouTube fallback
+  chain were never duration-checked against Spotify, even though they're
+  served from a different recording-match path entirely (yt-dlp closest-
+  duration heuristic vs Odesli ISRC mapping). A parallel audit of a
+  100-track random sample revealed a ~9% misroute rate in the M4A
+  population — extrapolated to the author's library, ~355 wrong tracks
+  silently passed every prior sweep. Widening the scan glob to
+  `*.flac` + `*.m4a` (one constant, one for-loop change) puts them under
+  the same Sunday-04:00 sweep as the FLACs.
+
+### Fixed
+
+- **M3U-rebuild corruption in `verify-and-cleanup.py --clean`.** The
+  previous load/rebuild round-trip naively stripped a `../_library/`
+  prefix from every playlist line, then re-added it during the rebuild.
+  This worked for FLAC/M4A entries that genuinely lived under
+  `_library/`, but turned MP3-fallback lines (e.g.
+  `../../liked/Foo.mp3`) into broken `../_library/../../liked/Foo.mp3`
+  paths on disk. In practice the bug was masked by `migrate-to-flat.py`
+  running shortly after every `--clean` and regenerating the M3Us from
+  scratch — but in steady state (watchdog gone) the corruption could
+  linger. New `m3u_line_under_library()` helper preserves non-library
+  lines verbatim through the rebuild.
+
+### Refactored
+
+- `verify-and-cleanup.py`: renamed internal `flacs` → `audio_files`,
+  `flac_dur` → `file_dur` in bad-record dicts. The report JSON gets the
+  new key — any tooling consuming the old `flac_dur` key needs to update.
+
+### Tests
+
+- `tests/test_verify_m3u.py` (7 cases) pins `m3u_line_under_library()`'s
+  contract — FLAC and M4A lines under `_library/` produce a rel path,
+  MP3 fallback lines produce `None`. Total suite now 34 tests.
+
 ## [0.3.0] — 2026-06-19
 
 ### Added

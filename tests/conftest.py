@@ -33,3 +33,8 @@ def audit():
 @pytest.fixture(scope="session")
 def dedup():
     return _load("dedup_tracks", "dedup-tracks.py")
+
+
+@pytest.fixture(scope="session")
+def verify():
+    return _load("verify_and_cleanup", "verify-and-cleanup.py")

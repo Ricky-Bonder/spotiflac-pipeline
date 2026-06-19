@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-# Walk every FLAC in _library/, extract its Spotify URL tag, fetch the real
-# Spotify duration, compare to the FLAC's actual audio duration. If they
-# differ by more than TOLERANCE_SEC seconds, flag the file as bad (metadata/
-# audio mismatch — typically a misrouted download from spotiflac's Odesli-
-# based resolver).
+# Walk every FLAC + M4A in _library/, extract its Spotify URL tag, fetch the
+# real Spotify duration, compare to the file's actual audio duration. If they
+# differ by more than TOLERANCE_SEC seconds, flag the file as bad
+# (metadata/audio mismatch — typically a misrouted download from spotiflac's
+# Odesli-based resolver for FLAC, or yt-dlp picking the wrong YouTube video
+# for M4A fallback).
 #
 # Modes:
 #   default (no args)     verify only; write JSON report
@@ -34,6 +35,8 @@ CACHE_FILE = STATE_DIR / "spotify-track-cache.json"
 
 TOLERANCE_SEC = 5.0
 UA = "Mozilla/5.0"
+AUDIO_EXTS = (".flac", ".m4a")
+M3U_LIBRARY_PREFIX = "../_library/"
 
 
 def ffprobe_info(path: Path):
@@ -79,17 +82,32 @@ def spotify_duration(track_id, cache):
 
 
 def load_m3u_playlists():
-    """Return {m3u_stem: set(track_rel_paths_under_library)}."""
+    """Return {m3u_stem: [verbatim non-comment lines]}.
+
+    Stored verbatim (NOT prefix-stripped) so non-`_library/` paths — e.g.
+    MP3 fallback entries like `../../liked/Foo.mp3` — survive a round-trip
+    through clean()'s rebuild without being mangled.
+    """
     out = {}
     for m3u in PLAY.glob("*.m3u8"):
-        tracks = set()
+        lines = []
         for line in m3u.read_text(encoding="utf-8", errors="replace").splitlines():
             if line.startswith("#") or not line.strip():
                 continue
-            # paths look like "../_library/Artist/Album/Title.flac"
-            tracks.add(line.replace("../_library/", "", 1))
-        out[m3u.stem] = tracks
+            lines.append(line)
+        out[m3u.stem] = lines
     return out
+
+
+def m3u_line_under_library(line):
+    """If this M3U line points at a file under _library/, return the rel path; else None.
+
+    Lines starting with `../_library/` map to files in LIB. Anything else
+    (MP3 fallback entries, `#` directives) returns None.
+    """
+    if line.startswith(M3U_LIBRARY_PREFIX):
+        return line[len(M3U_LIBRARY_PREFIX):]
+    return None
 
 
 def verify():
@@ -100,16 +118,18 @@ def verify():
         except Exception:
             cache = {}
 
-    flacs = sorted(LIB.rglob("*.flac"))
-    print(f"Scanning {len(flacs)} FLAC files…", file=sys.stderr)
+    audio_files = sorted(
+        f for ext in AUDIO_EXTS for f in LIB.rglob(f"*{ext}")
+    )
+    print(f"Scanning {len(audio_files)} audio files (FLAC + M4A)…", file=sys.stderr)
 
     bad = []
     unknown = []
     good = 0
 
-    for i, flac in enumerate(flacs, 1):
-        rel = str(flac.relative_to(LIB))
-        info = ffprobe_info(flac)
+    for i, audio_file in enumerate(audio_files, 1):
+        rel = str(audio_file.relative_to(LIB))
+        info = ffprobe_info(audio_file)
         if not info or info["duration"] is None:
             unknown.append({"file": rel, "reason": "ffprobe failed"})
             continue
@@ -131,7 +151,7 @@ def verify():
             bad.append({
                 "file": rel,
                 "spotify_id": spotify_id,
-                "flac_dur": round(info["duration"], 2),
+                "file_dur": round(info["duration"], 2),
                 "spotify_dur": spot_dur,
                 "diff": round(diff, 2),
                 "isrc": info["isrc"],
@@ -140,21 +160,24 @@ def verify():
             good += 1
 
         if i % 25 == 0:
-            print(f"  {i}/{len(flacs)}  good={good} bad={len(bad)} unknown={len(unknown)}", file=sys.stderr)
+            print(f"  {i}/{len(audio_files)}  good={good} bad={len(bad)} unknown={len(unknown)}", file=sys.stderr)
             CACHE_FILE.write_text(json.dumps(cache, indent=2))
 
     CACHE_FILE.write_text(json.dumps(cache, indent=2))
 
-    # Map bad files back to their playlists
+    # Map bad files back to their playlists (by matching against m3u lines'
+    # `../_library/...` references; MP3-fallback lines never match).
     playlists = load_m3u_playlists()
+    bad_rel_set = {b["file"] for b in bad}
     affected_playlists = defaultdict(list)
-    for b in bad:
-        for pname, tracks in playlists.items():
-            if b["file"] in tracks:
-                affected_playlists[pname].append(b["file"])
+    for pname, lines in playlists.items():
+        for line in lines:
+            rel = m3u_line_under_library(line)
+            if rel and rel in bad_rel_set:
+                affected_playlists[pname].append(rel)
 
     report = {
-        "total": len(flacs),
+        "total": len(audio_files),
         "good": good,
         "bad": bad,
         "unknown": unknown,
@@ -184,6 +207,10 @@ def clean():
     playlists = load_m3u_playlists()
     bad_files = {b["file"] for b in bad}
 
+    def line_is_bad(line):
+        rel = m3u_line_under_library(line)
+        return rel is not None and rel in bad_files
+
     # 1. Delete bad files
     deleted = 0
     for rel in bad_files:
@@ -194,25 +221,29 @@ def clean():
         except FileNotFoundError:
             pass
 
-    # 2. Remove the freshly-deleted entries from each M3U and rebuild
-    for pname, tracks in playlists.items():
-        remaining = sorted(tracks - bad_files)
+    # 2. Rewrite each M3U keeping every line whose target file wasn't deleted.
+    # MP3-fallback lines (e.g. `../../liked/Foo.mp3`) pass through verbatim
+    # because they never start with `../_library/`.
+    for pname, lines in playlists.items():
+        kept = [line for line in lines if not line_is_bad(line)]
         m3u = PLAY / f"{pname}.m3u8"
         with open(m3u, "w", encoding="utf-8") as f:
             f.write("#EXTM3U\n")
-            for t in remaining:
-                f.write(f"../_library/{t}\n")
+            for line in kept:
+                f.write(f"{line}\n")
 
-    # 3. Rebuild "All Tracks.m3u8" as union of all remaining
-    all_tracks = set()
-    for pname, tracks in playlists.items():
+    # 3. Rebuild "All Tracks.m3u8" as union of all surviving lines (dedup'd).
+    all_lines = set()
+    for pname, lines in playlists.items():
         if pname == "All Tracks":
             continue
-        all_tracks |= (tracks - bad_files)
+        for line in lines:
+            if not line_is_bad(line):
+                all_lines.add(line)
     with open(PLAY / "All Tracks.m3u8", "w", encoding="utf-8") as f:
         f.write("#EXTM3U\n")
-        for t in sorted(all_tracks):
-            f.write(f"../_library/{t}\n")
+        for line in sorted(all_lines):
+            f.write(f"{line}\n")
 
     # 4. Unmark affected playlists from done.txt
     affected_names = set(report.get("affected_playlists", {}).keys())
@@ -241,7 +272,7 @@ def clean():
             DONE_LOG.write_text("\n".join(kept) + ("\n" if kept else ""))
             print(f"Unmarked {len(unmark)} playlist(s) from done.txt for retry.")
 
-    print(f"Deleted {deleted} bad FLAC file(s), regenerated {len(playlists)} M3U(s) + All Tracks union.")
+    print(f"Deleted {deleted} bad audio file(s), regenerated {len(playlists)} M3U(s) + All Tracks union.")
 
 
 if __name__ == "__main__":
