@@ -171,36 +171,40 @@ def _index_file(index, f):
 
 
 def update_index(index, moved_new):
-    """Add new files to index. Also prune entries pointing to dead paths. First
-    run (empty index) does a full library scan."""
-    if not index:
-        # Initial scan
-        print("Initial library scan (first run)…", file=sys.stderr)
-        for f in LIB.rglob("*"):
-            if not f.is_file() or f.suffix.lower() not in AUDIO_EXTS:
-                continue
-            if any(part.endswith("_quarantine") for part in f.parts):
-                continue
-            _index_file(index, f)
-        print(f"  indexed {len(index)} files", file=sys.stderr)
-        return
+    """Reconcile the index against the library.
 
-    # Incremental: add new files
-    added = 0
-    for f in moved_new:
-        if f.suffix.lower() not in AUDIO_EXTS:
-            continue
-        if _index_file(index, f):
-            added += 1
-    if added:
-        print(f"  index +{added} new files", file=sys.stderr)
+    1. Prune entries whose file is gone.
+    2. Index every on-disk audio file whose path is not an index value —
+       not just freshly-moved files. This matters when an index entry dies
+       while its track survives under another path: e.g. the index pointed
+       at an M4A twin that dedup quarantined, while the keeper FLAC (same
+       track ID, indexed earlier, later overwritten) is still on disk.
+       An increment that only looked at moved_new left such tracks
+       unindexed forever, silently dropping them from every M3U.
 
-    # Prune stale entries
+    ffprobe runs only for unindexed files, so steady-state cost is one
+    rglob + set lookups.
+    """
+    # Prune first so a keeper can reclaim its ID cleanly below.
     stale = [tid for tid, rel in index.items() if not (LIB / rel).exists()]
     for tid in stale:
         del index[tid]
     if stale:
         print(f"  pruned {len(stale)} dead entries", file=sys.stderr)
+
+    known_paths = set(index.values())
+    added = 0
+    for f in sorted(LIB.rglob("*")):
+        if not f.is_file() or f.suffix.lower() not in AUDIO_EXTS:
+            continue
+        if any(part.endswith("_quarantine") for part in f.parts):
+            continue
+        if str(f.relative_to(LIB)) in known_paths:
+            continue
+        if _index_file(index, f):
+            added += 1
+    if added:
+        print(f"  index +{added} files (reconcile)", file=sys.stderr)
 
 
 def build_mp3_index():

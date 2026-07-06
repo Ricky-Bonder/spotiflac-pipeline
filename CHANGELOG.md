@@ -19,6 +19,29 @@ not a per-day snapshot.
   `track-id-index.json` before invoking spotiflac, so unmarking a playlist
   for a handful of bad tracks doesn't re-download the entire playlist.
 
+## [0.5.1] — 2026-07-06
+
+### Fixed
+
+- **`migrate-to-flat.py` index increment silently dropped tracks.** Found
+  minutes after deploying 0.5.0's cleanup: the index entry for most twins
+  pointed at the M4A (indexed later, overwriting the FLAC's entry). When
+  dedup quarantined those M4As, `update_index()` pruned the dead entries —
+  but its incremental pass only ever indexed freshly-*moved* files, so the
+  surviving FLAC keepers were never re-indexed. On the author's library the
+  index collapsed from 3,872 to 319 entries and 1,222 tracks vanished from
+  the M3Us. `update_index()` is now a true disk↔index reconcile: prune
+  dead entries, then index every on-disk file whose path is not an index
+  value (collisions resolved via the keeper rule). ffprobe still runs only
+  for unindexed files, so steady-state cost is one rglob + set lookups.
+
+### Tests
+
+- `tests/test_migrate_reconcile.py` (5 cases) reproduces the incident with
+  a monkeypatched library: orphaned-keeper re-index, twin quarantine at
+  reconcile, quarantine-dir skip, dead-entry pruning, untagged files.
+  Suite now 45 tests.
+
 ## [0.5.0] — 2026-07-06
 
 ### Fixed
