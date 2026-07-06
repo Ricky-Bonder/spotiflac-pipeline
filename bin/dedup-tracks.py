@@ -184,16 +184,21 @@ def main():
         # Look up Spotify ID for this file
         spotify_id = None
         spotify_duration = None
-        # FLAC: try URL tag (already loaded into index, but ffprobe-tag is fallback)
-        if ext == "flac":
-            # Reverse-lookup via flac_index: find id whose path matches
-            rel_lib = str(abs_path.relative_to(SPOTIFLAC_LIB)) if SPOTIFLAC_LIB in abs_path.parents else None
+        # Any file under _library: reverse-lookup via the ID index. spotiflac
+        # writes the same TAG:URL into FLAC, M4A and MP3 outputs, so this must
+        # NOT be gated on extension — a YouTube-fallback M4A twin of an
+        # existing FLAC carries the identical track ID, and gating on FLAC
+        # sent those twins to the fuzzy pool where they never met their
+        # by-ID counterpart (the "583 side-by-side duplicates" bug).
+        rel_lib = str(abs_path.relative_to(SPOTIFLAC_LIB)) if SPOTIFLAC_LIB in abs_path.parents else None
+        if rel_lib:
             for sid, p_rel in flac_index.items():
                 if p_rel == rel_lib:
                     spotify_id = sid
                     break
-            if not spotify_id and tag_id:
-                spotify_id = tag_id
+        # Embedded URL tag is authoritative regardless of location/format.
+        if not spotify_id and tag_id:
+            spotify_id = tag_id
         # MP3 (spotdl): look in audit
         # Audit-spotdl writes paths relative to SPOTDL_ROOT, so look up
         # this file's path under SPOTDL_ROOT to fetch its spotify_id.

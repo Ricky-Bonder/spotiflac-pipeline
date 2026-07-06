@@ -116,6 +116,60 @@ def save_index(index):
     INDEX_FILE.write_text(json.dumps(index, indent=2, ensure_ascii=False))
 
 
+# Rank for the ingest-time keeper rule. Mirrors dedup-tracks.py's
+# FORMAT_RANK but keyed by suffix.
+_SUFFIX_RANK = {".flac": 3, ".mp3": 2, ".m4a": 1, ".opus": 1, ".ogg": 1, ".aac": 1}
+
+
+def pick_keeper(old_rel, new_rel):
+    """Given two library-relative paths claiming the same Spotify track ID,
+    return (keeper_rel, loser_rel) by format rank; ties keep the incumbent.
+
+    This is the ingest-time self-heal: re-downloading a playlist can produce
+    the same track in a different format (e.g. a YouTube-fallback M4A next
+    to an existing verified FLAC). One track ID must map to exactly one
+    file — the lower-ranked twin gets quarantined at ingest instead of
+    accumulating.
+    """
+    old_rank = _SUFFIX_RANK.get(Path(old_rel).suffix.lower(), 0)
+    new_rank = _SUFFIX_RANK.get(Path(new_rel).suffix.lower(), 0)
+    if new_rank > old_rank:
+        return new_rel, old_rel
+    return old_rel, new_rel
+
+
+def _quarantine(rel):
+    """Move a library file into LIB/_dedup_quarantine/ (reversible), encoding
+    the original path into the filename the same way dedup-tracks.py does."""
+    src = LIB / rel
+    if not src.exists():
+        return
+    qdir = LIB / "_dedup_quarantine"
+    qdir.mkdir(exist_ok=True)
+    dest = qdir / str(rel).replace("/", "⁄")
+    try:
+        shutil.move(str(src), str(dest))
+        print(f"  quarantined twin: {rel}", file=sys.stderr)
+    except OSError as e:
+        print(f"  ! could not quarantine {rel}: {e}", file=sys.stderr)
+
+
+def _index_file(index, f):
+    """Index one audio file, resolving track-ID collisions via pick_keeper."""
+    tid = url_tag_id(f)
+    if not tid:
+        return False
+    new_rel = str(f.relative_to(LIB))
+    old_rel = index.get(tid)
+    if old_rel and old_rel != new_rel and (LIB / old_rel).exists():
+        keeper, loser = pick_keeper(old_rel, new_rel)
+        _quarantine(loser)
+        index[tid] = keeper
+    else:
+        index[tid] = new_rel
+    return True
+
+
 def update_index(index, moved_new):
     """Add new files to index. Also prune entries pointing to dead paths. First
     run (empty index) does a full library scan."""
@@ -123,10 +177,11 @@ def update_index(index, moved_new):
         # Initial scan
         print("Initial library scan (first run)…", file=sys.stderr)
         for f in LIB.rglob("*"):
-            if f.is_file() and f.suffix.lower() in AUDIO_EXTS:
-                tid = url_tag_id(f)
-                if tid:
-                    index[tid] = str(f.relative_to(LIB))
+            if not f.is_file() or f.suffix.lower() not in AUDIO_EXTS:
+                continue
+            if any(part.endswith("_quarantine") for part in f.parts):
+                continue
+            _index_file(index, f)
         print(f"  indexed {len(index)} files", file=sys.stderr)
         return
 
@@ -135,9 +190,7 @@ def update_index(index, moved_new):
     for f in moved_new:
         if f.suffix.lower() not in AUDIO_EXTS:
             continue
-        tid = url_tag_id(f)
-        if tid:
-            index[tid] = str(f.relative_to(LIB))
+        if _index_file(index, f):
             added += 1
     if added:
         print(f"  index +{added} new files", file=sys.stderr)

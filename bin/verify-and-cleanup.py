@@ -120,6 +120,7 @@ def verify():
 
     audio_files = sorted(
         f for ext in AUDIO_EXTS for f in LIB.rglob(f"*{ext}")
+        if not any(part.endswith("_quarantine") for part in f.parts)
     )
     print(f"Scanning {len(audio_files)} audio files (FLAC + M4A)…", file=sys.stderr)
 

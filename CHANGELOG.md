@@ -15,6 +15,48 @@ not a per-day snapshot.
 - Make `spotify-diff.py` re-install the watchdog cron when it unmarks a
   playlist — currently a steady-state gap (diff detects additions and
   unmarks, but nothing automatically picks the work back up).
+- Teach the batch driver to skip tracks whose ID is already in
+  `track-id-index.json` before invoking spotiflac, so unmarking a playlist
+  for a handful of bad tracks doesn't re-download the entire playlist.
+
+## [0.5.0] — 2026-07-06
+
+### Fixed
+
+- **Cross-format duplicate blindness in `dedup-tracks.py`.** The Spotify-ID
+  assignment for library files (index reverse-lookup + embedded `TAG:URL`
+  fallback) was gated on `ext == "flac"`. M4A and MP3 files in `_library/`
+  carry the identical `TAG:URL` written by spotiflac, but never got their
+  ID resolved — so a YouTube-fallback M4A twin of an existing FLAC landed
+  in the fuzzy-matching pool while its FLAC sat in the by-ID cluster, and
+  the two were never compared. On the author's library this had silently
+  accumulated **583 side-by-side FLAC + M4A pairs** (same directory, same
+  stem, same track ID, ~5 GB of redundant audio) that survived every dedup
+  pass. The gate is gone: every audio file under `_library/` resolves its
+  ID the same way.
+
+- **Duplicate accumulation at ingest in `migrate-to-flat.py`.** Root cause
+  of the twins: re-downloading a playlist (e.g. after the verifier unmarks
+  it) re-fetches every track, and the batch may land a different format
+  than the prior run (provider chains fall through to YouTube when the
+  FLAC providers are down). The file-move pass keys on the full destination
+  path — same stem, different extension → no collision → both kept. New
+  ingest-time self-heal: when a newly indexed file's track ID already maps
+  to a different existing file, `pick_keeper()` applies the format-rank
+  rule (FLAC > MP3 > M4A, ties keep the incumbent) and the loser moves to
+  `_library/_dedup_quarantine/` immediately. One track ID ↔ one file, by
+  construction.
+
+- `migrate-to-flat.py`'s initial full-library scan now skips
+  `*_quarantine/` directories (it could previously resurrect quarantined
+  files into the index on a fresh-index rebuild).
+
+### Tests
+
+- `tests/test_migrate_ingest.py` (6 cases) pins `pick_keeper()`'s contract,
+  including a cross-module check that migrate's suffix ranks agree with
+  dedup's `FORMAT_RANK` — two disagreeing keeper rules would fight each
+  other across runs. Suite now 40 tests.
 
 ## [0.4.0] — 2026-06-19
 

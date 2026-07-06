@@ -38,3 +38,8 @@ def dedup():
 @pytest.fixture(scope="session")
 def verify():
     return _load("verify_and_cleanup", "verify-and-cleanup.py")
+
+
+@pytest.fixture(scope="session")
+def migrate():
+    return _load("migrate_to_flat", "migrate-to-flat.py")
