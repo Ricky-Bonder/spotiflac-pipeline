@@ -117,3 +117,48 @@ The usual culprits:
 Both `_common.sh:spf_notify` and `_common.py:notify` are single-call
 abstractions. Swap their bodies to POST to a Discord webhook — open a PR
 once you've done it, this should become a configurable backend.
+
+
+---
+
+## spotiflac ≥3.8: the extension era
+
+Since 3.x, spotiflac downloads exclusively through JS **extensions** run by
+Node.js, installed on demand from a registry. A whole class of new failure
+modes comes with that:
+
+### Every extension times out at startup ("did not respond within 30.0s")
+
+Almost always **Node < 20**. The extension sandbox (`_fsguard.js`) wraps
+`fs.openSync`, and on Node 18 the CommonJS module loader's own reads go
+through that wrapper and get misclassified as writes — the extension process
+dies before its ready handshake. Install Node ≥ 20 (a user-local tarball is
+fine) and put its `bin/` in `SPOTIFLAC_EXTRA_PATH`.
+
+### "file.downloadSegments is not a function" / "transformPatternedBlocks is not a function"
+
+The registry's newest extensions target a newer app runtime than the PyPI
+module ships. Pin older extension builds that only require the features your
+bridge implements (check `grep -c downloadSegments …/SpotiFLAC/extensions/_bridge.js`):
+download a compatible `.sflx` from the registry repo's git history, unzip it
+over `~/.spotiflac/extensions/<name>/`, and **unset `SPOTIFLAC_REGISTRIES`**
+afterwards — the startup bootstrap force-updates any version mismatch and
+would undo your pin.
+
+### "[Errno 2] No such file or directory: 'Xvfb'"
+
+The deezer/tidal extensions solve a signed-session challenge by driving a
+real browser. Install `xvfb` and a Chromium (`apt install xvfb
+chromium-browser`); the solver also honors `CHROME_PATH`.
+
+### HTTP 429 from the resolver API on every track
+
+The signed-session bootstrap endpoint rate-limits bursts. It recovers on its
+own; avoid concurrent multi-extension retries against it. Sessions are cached
+under `~/.spotiflac/` after the first success.
+
+### A whole playlist keeps re-downloading after every retry
+
+You are on the pre-0.6 batch driver. `run_all.sh` now fetches per-track via
+`fetch-missing.py` and only downloads IDs absent from `track-id-index.json` —
+a playlist retry for 3 missing tracks costs 3 download attempts.

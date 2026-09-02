@@ -10,14 +10,91 @@ not a per-day snapshot.
 
 ## [Unreleased]
 
-- Docker example, Discord notifier, web status page.
-- Re-validate spotiflac 0.9.x to consider bumping the upper pin to `<1.0`.
-- Make `spotify-diff.py` re-install the watchdog cron when it unmarks a
-  playlist — currently a steady-state gap (diff detects additions and
-  unmarks, but nothing automatically picks the work back up).
-- Teach the batch driver to skip tracks whose ID is already in
-  `track-id-index.json` before invoking spotiflac, so unmarking a playlist
-  for a handful of bad tracks doesn't re-download the entire playlist.
+- Discord notifier, web status page.
+- `RELEASETYPE` (album/single/EP) tagging — Spotify's metadata path returns
+  an empty `album_type`; needs a secondary source (Deezer?).
+- Wire `tools/media-enrich.py lyrics` sources beyond LRCLib/Apple once any
+  of the other provider proxies come back to life.
+
+
+## [0.7.0] — 2026-09-02
+
+Library maintenance toolkit, grown while consolidating three generations of
+downloads (spotdl MP3s, Lidarr grabs, external yt-dlp syncs) into the one
+`_library/<Artist>/<Album>/` structure.
+
+### Added
+
+- **`tools/enrich-tags.py`** — genre normalization to a single English
+  taxonomy (with junk-genre re-derivation via artist-majority vote +
+  Deezer-by-ISRC), fill-only completion of artist/album/year/track numbers/
+  composer from Spotify metadata (cached in `track-meta-cache.json`).
+- **`tools/media-enrich.py`** — three subcommands: `art` (replace covers on
+  YouTube-sourced rips with the true Spotify album cover, fill missing art
+  via Deezer/iTunes search, write per-album `cover.jpg`, everything
+  downscaled to 300 px), `lyrics` (LRCLib, synced when available, embedded
+  per-format), `country` (MusicBrainz artist origin as the Picard-style
+  release-country tag — Navidrome/Symfonium expose it as a browse facet).
+- **`tools/backfill-lyrics.py`** — second lyrics pass through spotiflac's own
+  multi-provider fetcher with strict pacing and a miss-cache. Hard-won
+  lesson encoded in the defaults: the iTunes search API rate-limits around
+  20 req/min/IP and 403-blocks offenders for hours.
+- **`tools/canonicalize.py`** — make tags AND folder placement match Spotify
+  canonical metadata (album-artist's first artist as the folder), updating
+  the track index so playlist M3Us survive the moves.
+- **`tools/library-import.py`** — fold external download folders (yt-dlp
+  SoundCloud syncs, an old Lidarr root) into `_library/`, plus a
+  fill-missing-tags-from-path sweep.
+
+### Fixed
+
+- `migrate-to-flat.py` no longer re-ffprobes tagless imports on every run
+  (`no-url-cache.json`) — steady-state migrate dropped from ~60 s to ~1.5 s
+  on a 4 600-file library.
+
+## [0.6.0] — 2026-09-01
+
+The spotiflac 3.8 migration. Upstream moved from built-in providers (0.5.x)
+to a JS-extension runtime — and this release rebuilds the pipeline's
+download path around it, fixing the two long-standing efficiency sinks in
+the same stroke.
+
+### Added
+
+- **`fetch-missing.py` + missing-only `run_all.sh`.** The batch driver now
+  enumerates each playlist's full track list through spotiflac's metadata
+  client and downloads only IDs absent from `track-id-index.json`. A
+  +5-tracks playlist update costs 5 downloads instead of a full re-run.
+- **Permanent-failure quarantine.** Tracks that fail
+  `SPOTIFLAC_MAX_TRACK_FAILS` separate batch attempts land in
+  `unavailable.txt` and stop blocking their playlist from completing —
+  ending the retry-forever loop for tracks no provider can deliver.
+  Delete a line to retry; a later success clears the entry automatically.
+- **Full-list `spotify-diff.py`.** Playlist diffing now uses the metadata
+  client too (embed scrape kept as fallback): the 100-track embed cap is
+  gone, so deletions are finally detected on big playlists.
+- `SPOTIFLAC_EXTRA_PATH` config key (user-local Node ≥ 20 for the extension
+  runtime) and extension-era docs: registry setup, version pinning against
+  extension/runtime skew, the Xvfb/Chromium session solver.
+- Experimental Docker runtime under `docker/` — Python + Node 22 + Xvfb +
+  Chromium + ffmpeg behind a scheduler entrypoint mirroring the crontab.
+
+### Changed
+
+- spotiflac pin **`>=3.8,<4`**. Provider chains default to
+  `deezer tidal,tidal deezer,deezer,tidal` — the amazon/ytmusic extensions'
+  search endpoints are dead as of late 2026.
+- `migrate-to-flat.py` M3U generation is now simply
+  `playlist-state ∩ track-id-index` — with full track lists in state, the
+  old spotdl-export enrichment and MP3-fallback machinery became dead code.
+
+### Removed
+
+- The spotdl-era side pipeline (`audit-spotdl.py`, `redownload-spotdl.py`,
+  `dedup-tracks.py`) and its config keys. It served its one-time purpose:
+  the legacy MP3 collection has been merged into `_library/` and the
+  missing-only driver + verifier cover everything it did.
+- `patches/` — 3.8's resolver made the 0.5.x Odesli `?url=` patch obsolete.
 
 ## [0.5.1] — 2026-07-06
 

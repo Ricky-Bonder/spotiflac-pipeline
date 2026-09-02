@@ -5,16 +5,19 @@
 
 An opinionated, self-healing pipeline for building a high-quality local music
 library from Spotify playlists — wraps [spotiflac](https://pypi.org/project/spotiflac/)
-and [yt-dlp](https://github.com/yt-dlp/yt-dlp) with a batch driver, a
-provider-rotation watchdog, audio/metadata verification, cross-source
-deduplication, and unified M3U playlist generation.
+with a missing-only batch driver, a permanent-failure quarantine, a
+provider-rotation watchdog, audio/metadata verification, per-playlist M3U
+generation, and a metadata enrichment toolkit (genres, covers, synced lyrics,
+artist countries).
 
 Built and battle-tested against a real 43-playlist library (~4 600 tracks,
-~250 GB FLAC + MP3) on a homelab Navidrome server. The [`CHANGELOG`](CHANGELOG.md)
-documents the ~25 days of iteration that produced this.
+~250 GB) serving Navidrome/Symfonium on a homelab box. The
+[`CHANGELOG`](CHANGELOG.md) documents the months of iteration that produced
+this — including the May→September 2026 migration from spotiflac 0.5 to the
+3.8 extension runtime.
 
-> **Personal-use quality, v0.2.** This is shared more as "show your work" than
-> as a polished tool. PRs welcome — see [CONTRIBUTING](docs/DEVELOPMENT.md).
+> **Personal-use quality.** This is shared more as "show your work" than as a
+> polished tool. PRs welcome — see [CONTRIBUTING](docs/DEVELOPMENT.md).
 
 ---
 
@@ -29,38 +32,39 @@ documents the ~25 days of iteration that produced this.
                 └───────────┬────────────┘
                             │ kicks off
                             ▼
-                ┌────────────────────────┐
-                │  run_all.sh            │  (per-playlist batch)
-                │  ─ spotiflac → FLAC    │
-                │  ─ on success: hook    │
-                └───────────┬────────────┘
-                            │
-              ┌─────────────┼─────────────┐
-              ▼             ▼             ▼
+                ┌────────────────────────┐     ┌──────────────────────────┐
+                │  run_all.sh            │────►│  fetch-missing.py        │
+                │  (per-playlist batch)  │     │  ─ full track list via   │
+                │                        │     │    spotiflac's metadata  │
+                │  done when everything  │     │    client (no 100-cap)   │
+                │  is present *or*       │     │  ─ downloads ONLY tracks │
+                │  quarantined           │     │    absent from the index │
+                └───────────┬────────────┘     │  ─ unavailable.txt       │
+                            │                  │    quarantine after N    │
+              ┌─────────────┼─────────────┐    │    failed attempts       │
+              ▼             ▼             ▼    └──────────────────────────┘
        migrate-to-flat  verify-and-     spotify-diff
-       (flatten +       cleanup         (daily — detect
-        unified M3Us)   (duration-      adds/removes on
-                        mismatch        Spotify side)
+       (flatten into    cleanup         (daily — full-list diff,
+        _library/ +     (duration-      detects adds AND removes
+        M3U regen)      mismatch        on any playlist size)
                         purge)
-                            │
-                            ▼
-                ┌────────────────────────┐
-                │  audit-spotdl.py       │  (one-off — audit an
-                │  redownload-spotdl.py  │   existing spotdl MP3
-                │  dedup-tracks.py       │   collection, redownload
-                └────────────────────────┘   misrouted, then dedup
-                                             against the FLAC pass)
 ```
+
+Plus a `tools/` directory of library-maintenance utilities: tag enrichment
+and genre normalization, cover replacement for YouTube-sourced rips, synced
+lyrics backfill, MusicBrainz artist countries, and importers that fold
+external download folders (yt-dlp SoundCloud syncs, old Lidarr roots) into
+the same `_library/<Artist>/<Album>/` structure.
 
 ### The core problems it solves
 
 | Problem | Fix |
 |---|---|
-| spotiflac 0.5.1's Odesli resolver returns HTTP 400 (`?id=&platform=` deprecated) | A bundled patch ([`patches/`](patches/)) rebuilds the request as `?url=…` |
-| ~64 % of Tidal/Amazon FLACs are *misrouted* (right metadata, wrong audio) — Odesli's fuzzy mapping | Deezer-first provider chain (ISRC-based, correct by construction) + a duration-mismatch verifier that purges misroutes |
-| Some tracks (rare scores, regional releases) are only on YouTube | Two-phase yt-dlp fallback: `ytsearch10:` for metadata, pick the candidate whose duration is *closest* to Spotify's |
-| Multiple copies of the same track across spotdl + spotiflac + Lidarr | Cross-source dedup with `verified-good > FLAC > MP3 > M4A > bitrate > size` priority |
-| Spotify's web API now requires the app owner to be a Premium subscriber (2025+) | Auth-free embed scraping for playlist sync (capped at 100 tracks/playlist) |
+| A playlist retry re-downloads **all** its tracks (migrate moves files away, so spotiflac's skip-existing never fires) | `fetch-missing.py` diffs the live track list against `track-id-index.json` and fetches only the gap — a +5-tracks update costs 5 downloads |
+| Tracks no provider can deliver keep a playlist retrying forever | Per-track failure counter → `unavailable.txt` quarantine; the playlist completes with its obtainable set |
+| Fuzzy provider matching returns *misrouted* audio (right metadata, wrong recording) | Deezer-first chains (ISRC-based, correct by construction) + a duration-mismatch verifier that purges misroutes per batch and weekly |
+| Spotify's embed pages cap at 100 tracks, hiding deletions on big playlists | `spotify-diff.py` enumerates full track lists through spotiflac's metadata client (embed scrape kept as fallback) |
+| spotiflac ≥3.8 ships **no** download providers and its extension runtime has sharp edges (Node ≥ 20, browser-based session solver, extension/runtime version skew) | Documented setup + pinning strategy in [INSTALL](docs/INSTALL.md) and [TROUBLESHOOTING](docs/TROUBLESHOOTING.md); the pipeline scripts honor `SPOTIFLAC_EXTRA_PATH` for a user-local Node |
 
 ---
 
@@ -69,10 +73,10 @@ documents the ~25 days of iteration that produced this.
 ### Prerequisites
 
 - Linux (tested on Ubuntu 24.04). Likely works on macOS.
-- Python ≥ 3.10
-- `ffmpeg`, `patch`, `curl`
-- A spotiflac-compatible network — see [TROUBLESHOOTING](docs/TROUBLESHOOTING.md)
-  for the Spotify Premium gate
+- Python ≥ 3.10, `ffmpeg`, `curl`
+- **Node ≥ 20** (spotiflac's JS extension runtime breaks on distro Node 18)
+- **Xvfb + Chromium** for the deezer/tidal extensions' session solver
+- An extension registry for spotiflac ≥3.8 — see [INSTALL](docs/INSTALL.md#extensions)
 
 ```bash
 git clone https://github.com/Ricky-Bonder/spotiflac-pipeline
@@ -80,13 +84,9 @@ cd spotiflac-pipeline
 ./install.sh
 ```
 
-`install.sh` is idempotent. It:
-
-1. Verifies host deps
-2. Creates a Python venv at `~/.local/share/spotiflac-pipeline/venv`
-3. Installs `spotiflac` and `yt-dlp`
-4. Applies the `link_resolver.py` patch (skips if already patched)
-5. Seeds `~/.config/spotiflac-pipeline/spotiflac.env` and a `playlists.txt`
+`install.sh` is idempotent. It verifies host deps (warns on old Node /
+missing Xvfb), creates the venv, installs `spotiflac>=3.8` + `yt-dlp` +
+`mutagen`, and seeds the config + `playlists.txt`.
 
 ### Configure
 
@@ -95,6 +95,7 @@ Edit `~/.config/spotiflac-pipeline/spotiflac.env`. Every key is optional
 
 ```bash
 SPOTIFLAC_MUSIC_ROOT="$HOME/Music"        # where downloads live
+SPOTIFLAC_EXTRA_PATH="$HOME/.local/bin"   # if your Node ≥20 lives there
 SPOTIFLAC_TELEGRAM_BOT_TOKEN="123:abc…"   # optional, for notifications
 SPOTIFLAC_TELEGRAM_CHAT_ID="987654321"
 ```
@@ -121,6 +122,16 @@ Install the cron entries from [`examples/crontab.example`](examples/crontab.exam
 The watchdog handles everything from there — provider rotation, resource
 monitoring, self-shutdown on completion.
 
+### Run in Docker (experimental)
+
+`docker/` bundles the whole runtime — Python, Node 22, Xvfb, Chromium,
+ffmpeg — behind a scheduler entrypoint that mirrors the crontab cadence:
+
+```bash
+docker build -f docker/Dockerfile -t spotiflac-pipeline .
+# then adapt docker/docker-compose.example.yml (music/state/config volumes)
+```
+
 ---
 
 ## Documentation
@@ -128,8 +139,8 @@ monitoring, self-shutdown on completion.
 | | |
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Data flow, state files, M3U strategy, what each script does and why |
-| [`docs/INSTALL.md`](docs/INSTALL.md) | Long-form first-run walkthrough with sample output |
-| [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Spotify Premium gate, provider outages, common failure modes |
+| [`docs/INSTALL.md`](docs/INSTALL.md) | Long-form first-run walkthrough, spotiflac ≥3.8 extension setup |
+| [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Extension-runtime failure modes, provider outages, misroute defense |
 | [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | Every config key with intent and edge cases |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | How to test changes locally, the contributing flow |
 
@@ -137,15 +148,14 @@ monitoring, self-shutdown on completion.
 
 ## Known limitations
 
-- **Spotify Premium gate.** The Spotify Web API requires the *app owner* (not
-  just the end-user) to hold a Premium subscription for any authenticated
-  call. Without Premium, the pipeline falls back to scraping public embed
-  pages, which serve at most 100 tracks per playlist. Playlists larger than
-  that need a one-time import from another source — see
-  [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
+- **spotiflac ≥3.8 provider health is external.** Extensions resolve and
+  download through community endpoints that come and go; as of late 2026 only
+  the deezer and tidal-web extensions reliably work. The quarantine keeps the
+  pipeline converging regardless.
 - **No Windows support.** The shell scripts assume POSIX (`bash`, `pgrep`,
-  `crontab`, `journalctl`).
-- **No Sonarr/Beets integration.** Yet.
+  `crontab`).
+- **Docker runtime is experimental** — the bare-metal cron path is what the
+  author actually runs.
 
 ---
 
@@ -153,7 +163,7 @@ monitoring, self-shutdown on completion.
 
 | | |
 |---|---|
-| Stability | Personal-use — works for the author's 43-playlist library |
+| Stability | Personal-use — runs the author's 43-playlist library daily |
 | Maintained | Best-effort; the author runs this on their own server |
 | Open to PRs | Yes — see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) |
 | Roadmap | [`CHANGELOG.md`](CHANGELOG.md) under *Unreleased* |

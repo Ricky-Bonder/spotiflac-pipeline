@@ -7,14 +7,13 @@ This document explains *why* the pipeline looks the way it does. For the
 
 | File | Role | Trigger |
 |---|---|---|
-| `bin/run_all.sh` | Per-batch driver: iterate playlists, call spotiflac, parse session summary, hook post-success migrate + verify | manual, or kicked by watchdog |
+| `bin/run_all.sh` | Per-batch driver: iterate playlists, delegate each to `fetch-missing.py`, hook post-success migrate + verify, mark done when pending == 0 | manual, or kicked by watchdog |
+| `bin/fetch-missing.py` | Enumerate a playlist's full track list (metadata client), download only IDs absent from the index, maintain the `unavailable.txt` quarantine | called by `run_all.sh` |
 | `bin/spotiflac-watchdog.sh` | Keeps `run_all.sh` alive, rotates provider chains, defers to backups, self-disables when done | cron `*/15 * * * *` |
 | `bin/migrate-to-flat.py` | Flatten per-playlist subdirs → `_library/<Artist>/<Album>/`, maintain a persistent Spotify-ID index, regenerate M3Us | post-success hook from `run_all.sh` |
 | `bin/verify-and-cleanup.py` | Compare every FLAC's duration to Spotify's reported duration; flag/delete misroutes; regenerate affected M3Us | post-success hook + weekly cron |
-| `bin/spotify-diff.py` | Scrape each playlist's embed page; detect adds/removes; unmark playlist from `done.txt` if changed | daily cron |
-| `bin/audit-spotdl.py` | Audit a pre-existing spotdl MP3 collection against a JSON export | one-off |
-| `bin/redownload-spotdl.py` | Replace BAD spotdl MP3s via yt-dlp using closest-duration matching | one-off (after audit) |
-| `bin/dedup-tracks.py` | Cross-source dedup: keep one copy per track by quality priority | one-off / periodic |
+| `bin/spotify-diff.py` | Enumerate each playlist's FULL track list (metadata client, embed fallback); detect adds/removes; unmark playlist from `done.txt` if changed | daily cron |
+| `tools/*.py` | Library maintenance: tag enrichment + genre normalization, cover replacement, synced-lyrics backfill, artist countries, external-folder importers, Spotify-canonical renaming | one-off / periodic |
 
 ## Data flow
 
@@ -22,22 +21,23 @@ This document explains *why* the pipeline looks the way it does. For the
        Spotify playlist URL
               │
               ▼
-       ┌──────────────┐
-       │  spotiflac   │── (Odesli → Deezer/Tidal/Amazon/YouTube) ──► FLAC/M4A
-       └──────────────┘
+       ┌───────────────────┐
+       │  fetch-missing.py │── track list ∩ index → per-track spotiflac
+       │                   │   (≥3.8: JS extensions → Deezer/Tidal) ──► FLAC
+       └───────────────────┘
               │
               ▼
-       run_all.sh parses session summary
+       run_all.sh reads the RESULT line
               │
-       success │ failure
-        ▼      │
+       pending==0 │ pending>0 (retry next cycle; repeated
+        ▼         │ failures land in unavailable.txt)
    migrate-to-flat.py       ── appends to track-id-index.json
         │
         ▼
    verify-and-cleanup.py --clean   (purges duration mismatches,
         │                           re-opens affected playlists)
         ▼
-   _playlists/<Name>.m3u8        (FLAC entries first, MP3 fallback)
+   _playlists/<Name>.m3u8        (playlist-state ∩ track-id-index)
 ```
 
 ## State files
@@ -50,14 +50,13 @@ Everything that needs to survive across runs lives in `$SPOTIFLAC_STATE_DIR`
 | `playlists.txt` | user | Source list — one Spotify URL per line |
 | `done.txt` | `run_all.sh` | Playlist IDs that completed (skip on next run) |
 | `failed.txt` | `run_all.sh` | Per-playlist log of failed tracks for the last batch |
-| `playlist-state.json` | `spotify-diff.py` | Last-known name / total / track IDs per playlist |
+| `playlist-state.json` | `spotify-diff.py` | Last-known name / total / FULL track ID list per playlist |
+| `unavailable.txt` | `fetch-missing.py` | Per-track failure counter → permanent-failure quarantine (TSV; delete a line to retry) |
+| `no-url-cache.json` | `migrate-to-flat.py` | Files known to carry no URL tag (skip re-probing imports) |
+| `track-meta-cache.json` | `tools/enrich-tags.py` | Cached Spotify metadata per track id (title/artists/album/year/ISRC/cover) |
 | `track-id-index.json` | `migrate-to-flat.py` | `{spotify_id: relative_path}` for everything in `_library/` |
 | `verify-report.json` | `verify-and-cleanup.py` | Latest FLAC verification results |
 | `spotify-track-cache.json` | `verify-and-cleanup.py` | Spotify duration cache (avoids re-scraping) |
-| `spotdl-audit.json` | `audit-spotdl.py` | MP3 audit buckets (good/bad/unmatched) |
-| `spotdl-redownload-state.json` | `redownload-spotdl.py` | Per-spotify-id attempt counter |
-| `spotdl-permanent-failures.txt` | `redownload-spotdl.py` | Spotify IDs that exhausted MAX_ATTEMPTS |
-| `dedup-report.json` | `dedup-tracks.py` | Last dedup pass — groups, keepers, losers |
 | `watchdog.state` | `spotiflac-watchdog.sh` | Sourceable Bash file: prev_done_count, attempts, paused_until, service_idx |
 | `service.conf` | watchdog | Currently-active provider chain (also sourceable Bash) |
 | `*.log` | various | Rotated at 5 MB by the watchdog |
@@ -70,7 +69,7 @@ $SPOTIFLAC_OUTPUT_DIR/
 │   └── <Artist>/<Album>/Track.flac
 └── _playlists/
     ├── All Tracks.m3u8        (union of every playlist's resolved tracks)
-    ├── <Playlist 1>.m3u8       (FLAC entries first, then MP3 fallback)
+    ├── <Playlist 1>.m3u8
     └── <Playlist 2>.m3u8
 ```
 
@@ -81,10 +80,11 @@ track in three playlists is one file on disk.
 
 ## Why two stages of misroute defense
 
-spotiflac uses [Odesli](https://song.link) (api.song.link) to translate a
-Spotify track into its Deezer / Tidal / Amazon Music equivalent, then
-downloads from the matched provider. Odesli's matching is *fuzzy* — same
-artist + title + duration, not the same recording. For tracks with multiple
+Provider matching translates a Spotify track into another platform's catalog
+entry. Depending on the spotiflac generation that mapping is Odesli
+(api.song.link, ≤0.5) or the extension's own search (≥3.8) — both are *fuzzy*
+for anything without an ISRC hit: same artist + title + duration, not
+necessarily the same recording. For tracks with multiple
 versions (live, remaster, deluxe, regional), Odesli sometimes maps to the
 wrong one. The downloaded FLAC has correct metadata but wrong audio.
 
