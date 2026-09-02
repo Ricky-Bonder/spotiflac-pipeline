@@ -1,0 +1,29 @@
+# Example compose file for the containerized pipeline (experimental).
+# Copy next to your other stacks and adjust the volume paths.
+#
+#   music:  the library root (the pipeline manages <root>/spotiflac inside it)
+#   state:  small JSON/txt state files, logs, quarantine list
+#   config: holds spotiflac.env (start from config.example.env)
+#
+# First run: put your SPOTIFLAC_REGISTRIES choice in config/spotiflac.env —
+# spotiflac ≥3.8 ships no download providers; you must point it at an
+# extension registry (see docs/INSTALL.md).
+
+services:
+  spotiflac-pipeline:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: spotiflac-pipeline
+    restart: unless-stopped
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      # SPOTIFLAC_TELEGRAM_BOT_TOKEN: ""
+      # SPOTIFLAC_TELEGRAM_CHAT_ID: ""
+    volumes:
+      - /path/to/music:/music
+      - ./state:/state
+      - ./config:/config
+    # The browser-based session solver needs a bit of shared memory.
+    shm_size: 512m
