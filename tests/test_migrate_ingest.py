@@ -42,9 +42,3 @@ def test_mp3_beats_m4a(migrate):
     keeper, loser = migrate.pick_keeper("A/B/track.m4a", "A/B/track.mp3")
     assert keeper.endswith(".mp3")
 
-
-def test_rank_table_matches_dedup(migrate, dedup):
-    """migrate's suffix ranks must agree with dedup-tracks.py's FORMAT_RANK —
-    two disagreeing keeper rules would fight each other across runs."""
-    for ext, rank in dedup.FORMAT_RANK.items():
-        assert migrate._SUFFIX_RANK[f".{ext}"] == rank

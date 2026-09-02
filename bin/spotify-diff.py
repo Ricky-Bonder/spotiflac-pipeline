@@ -74,7 +74,38 @@ def fetch_embed_tracks(playlist_id):
     return raw_ids, list(dict.fromkeys(raw_ids))
 
 
+def fetch_playlist_via_client(playlist_id):
+    """Full enumeration via SpotiFLAC's metadata client (GraphQL, paginated).
+    No 100-track cap → real deletion detection on big playlists. Requires the
+    script to run with the pipeline venv's python (crontab example does)."""
+    import asyncio
+    from SpotiFLAC.core.spotify_metadata import SpotifyMetadataClient
+
+    async def go():
+        return await SpotifyMetadataClient(timeout_s=15).get_playlist_tracks_async(playlist_id)
+
+    r = asyncio.run(go())
+    tracks = next(x for x in r if isinstance(x, list))
+    name = ""
+    for x in r:
+        if isinstance(x, dict) and x.get("name"):
+            name = x["name"]
+        elif isinstance(x, str) and x and not name:
+            name = x
+    ids = list(dict.fromkeys(t.id for t in tracks if t.id))
+    return {"name": name or "?", "total": len(tracks), "track_ids": ids, "complete": True}
+
+
 def fetch_playlist(playlist_id):
+    """Prefer the full metadata client; fall back to the embed scrape."""
+    try:
+        return fetch_playlist_via_client(playlist_id)
+    except Exception as e:
+        print(f"  client enumeration failed for {playlist_id} ({e}); embed fallback", file=sys.stderr)
+    return fetch_playlist_embed(playlist_id)
+
+
+def fetch_playlist_embed(playlist_id):
     """Combine: main URL → name+total, embed URL → track IDs (if total <= cap)."""
     name, total = fetch_main(playlist_id)
     # Embed caps around 100; we get all *available* tracks below that. Spotify's
@@ -111,10 +142,17 @@ def ffprobe_url_tag(path):
 def build_indexes():
     """Return (id_to_path, path_to_playlists)."""
     id_to_path = {}
-    for flac in LIBRARY.rglob("*.flac"):
-        tid = ffprobe_url_tag(flac)
-        if tid:
-            id_to_path[tid] = flac
+    idx_file = STATE_DIR / "track-id-index.json"
+    if idx_file.exists():
+        for tid, rel in json.loads(idx_file.read_text()).items():
+            p = LIBRARY / rel
+            if p.exists():
+                id_to_path[tid] = p
+    else:
+        for flac in LIBRARY.rglob("*.flac"):
+            tid = ffprobe_url_tag(flac)
+            if tid:
+                id_to_path[tid] = flac
     path_to_playlists = defaultdict(set)
     for m3u in PLAYLISTS_DIR.glob("*.m3u8"):
         for line in m3u.read_text(encoding="utf-8", errors="replace").splitlines():

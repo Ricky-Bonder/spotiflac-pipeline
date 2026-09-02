@@ -39,6 +39,33 @@ need python3 "python3"
 need ffprobe "ffmpeg"
 need curl    "curl"
 
+# spotiflac ≥3.8 runs its download providers as JS extensions under Node.
+# Node ≥ 20 is required: on Node 18 the extension sandbox misclassifies
+# module loads as writes and every extension dies with a startup timeout.
+if command -v node >/dev/null 2>&1; then
+    NODE_MAJOR=$(node -v | sed 's/^v//' | cut -d. -f1)
+    if [ "$NODE_MAJOR" -lt 20 ]; then
+        echo "  WARNING: node $(node -v) found — spotiflac's extension runtime needs ≥ 20." >&2
+        echo "  Install a user-local Node (e.g. official tarball into ~/.local) and set" >&2
+        echo "  SPOTIFLAC_EXTRA_PATH to its bin dir in your config." >&2
+    else
+        echo "  node $(node -v) — ok"
+    fi
+else
+    echo "  WARNING: node not found — spotiflac ≥3.8 needs Node ≥ 20 for its extensions." >&2
+fi
+
+# The deezer/tidal extensions solve a signed-session challenge with a real
+# browser: Xvfb + a Chromium are needed on headless boxes.
+for opt in Xvfb chromium-browser chromium google-chrome; do
+    command -v "$opt" >/dev/null 2>&1 && FOUND_BROWSER_DEPS="${FOUND_BROWSER_DEPS:-}$opt "
+done
+case "${FOUND_BROWSER_DEPS:-}" in
+    *Xvfb*chromium*|*Xvfb*chrome*) echo "  Xvfb + chromium — ok" ;;
+    *) echo "  NOTE: install xvfb + chromium for the deezer/tidal extensions" >&2
+       echo "        (apt install xvfb chromium-browser)" >&2 ;;
+esac
+
 PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
 if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
     echo "  Need Python ≥ 3.10 (found $PY_VER)." >&2
@@ -60,7 +87,7 @@ echo "[3/4] Installing spotiflac + yt-dlp into the venv…"
 # published wheel is broken (empty top_level.txt, missing backend/). We pin
 # to the validated 0.8.x range; raise upper bound after the next round of
 # upstream stabilises.
-"$SPOTIFLAC_VENV/bin/pip" install --quiet "spotiflac>=0.6.9,<0.9" "yt-dlp>=2024.0"
+"$SPOTIFLAC_VENV/bin/pip" install --quiet "spotiflac>=3.8,<4" "yt-dlp>=2024.0" "mutagen>=1.47"
 
 echo "[4/4] Preparing state directory at $SPOTIFLAC_STATE_DIR…"
 mkdir -p "$SPOTIFLAC_STATE_DIR"

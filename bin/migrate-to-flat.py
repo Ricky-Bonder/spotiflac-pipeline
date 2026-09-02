@@ -10,10 +10,9 @@
 #
 # Pass 3 (M3U REGEN): for every playlist in playlist-state.json, write
 #   _playlists/<Name>.m3u8 as the intersection of (track IDs in this
-#   playlist's state) and (IDs in the index). For >100-track playlists
-#   that the embed scrape didn't fully cover, enrich the ID set from an
-#   optional old spotdl playlists.json export (matched by name; entries in
-#   SPOTIFLAC_LIKES_ALIASES are merged together as one "Likes" proxy).
+#   playlist's state) and (IDs in the index). spotify-diff.py now stores
+#   FULL track lists for every playlist (metadata-client enumeration), so
+#   the old spotdl-export enrichment and MP3-fallback machinery are gone.
 #
 # Idempotent. Hook it after each successful spotiflac playlist completion
 # (run_all.sh already does this). The first invocation may take ~1-2 min
@@ -28,18 +27,14 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import (
-    OUTPUT_DIR, LIBRARY_DIR, PLAYLISTS_DIR, STATE_DIR, SPOTDL_ROOT,
-    OLD_PLAYLISTS_JSON, LIKES_ALIASES,
-)
+from _common import OUTPUT_DIR, LIBRARY_DIR, PLAYLISTS_DIR, STATE_DIR
 
 ROOT = OUTPUT_DIR
 LIB = LIBRARY_DIR
 PLAY = PLAYLISTS_DIR
 STATE_FILE = STATE_DIR / "playlist-state.json"
 INDEX_FILE = STATE_DIR / "track-id-index.json"
-AUDIT_FILE = STATE_DIR / "spotdl-audit.json"
-OLD_JSON = Path(OLD_PLAYLISTS_JSON) if OLD_PLAYLISTS_JSON else None
+NOURL_CACHE = STATE_DIR / "no-url-cache.json"   # files known to carry no URL tag
 
 AUDIO_EXTS = {".flac", ".m4a", ".mp3", ".ogg", ".opus", ".aac"}
 
@@ -192,6 +187,10 @@ def update_index(index, moved_new):
     if stale:
         print(f"  pruned {len(stale)} dead entries", file=sys.stderr)
 
+    try:
+        nourl = json.loads(NOURL_CACHE.read_text()) if NOURL_CACHE.exists() else {}
+    except Exception:
+        nourl = {}
     known_paths = set(index.values())
     added = 0
     for f in sorted(LIB.rglob("*")):
@@ -199,108 +198,51 @@ def update_index(index, moved_new):
             continue
         if any(part.endswith("_quarantine") for part in f.parts):
             continue
-        if str(f.relative_to(LIB)) in known_paths:
+        rel = str(f.relative_to(LIB))
+        if rel in known_paths:
             continue
+        mt = f.stat().st_mtime
+        if nourl.get(rel) == mt:
+            continue  # known tagless import, unchanged since last look
         if _index_file(index, f):
             added += 1
+        else:
+            nourl[rel] = mt
+    nourl = {r: t for r, t in nourl.items() if (LIB / r).exists()}
+    NOURL_CACHE.write_text(json.dumps(nourl))
     if added:
         print(f"  index +{added} files (reconcile)", file=sys.stderr)
 
 
-def build_mp3_index():
-    """Build {spotify_id: abs_mp3_path} from the spotdl audit's 'good' bucket,
-    filtering to files that still exist (not quarantined)."""
-    if not AUDIT_FILE.exists():
-        return {}
-    audit = json.loads(AUDIT_FILE.read_text())
-    music_root = SPOTDL_ROOT
-    out = {}
-    for x in audit["buckets"].get("good", []):
-        sid = x.get("spotify_id")
-        if not sid:
-            continue
-        p = music_root / x["path"]
-        # Skip any *_quarantine/ subdir (dedup or redownload-evidence files
-        # shouldn't be referenced by playlist M3Us)
-        if any(part.endswith("_quarantine") for part in p.parts):
-            continue
-        if p.exists():
-            out[sid] = p
-    return out
-
-
 def regenerate_m3us(index):
-    """Write one M3U per playlist in state, plus All Tracks union.
-    Each track is resolved: FLAC (from `index`) preferred, fallback to verified-good MP3."""
+    """One M3U per playlist: (state track_ids) ∩ (index), plus All Tracks."""
     state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
-    mp3_index = build_mp3_index()
-    if mp3_index:
-        print(f"  mp3 fallback index: {len(mp3_index)} verified-good MP3s", file=sys.stderr)
-
-    # Optional old playlists.json: enrichment for incomplete (>100-track) playlists
-    old_name_to_ids = {}
-    if OLD_JSON and OLD_JSON.exists():
-        try:
-            old = json.loads(OLD_JSON.read_text())
-            for pl in old.get("playlists", []):
-                key = "LIKES" if pl["name"] in LIKES_ALIASES else pl["name"]
-                ids = [
-                    (t.get("track") or {}).get("id")
-                    for t in pl.get("tracks", [])
-                ]
-                old_name_to_ids.setdefault(key, set()).update(i for i in ids if i)
-        except Exception as e:
-            print(f"  ! could not parse old json: {e}", file=sys.stderr)
-
     PLAY.mkdir(exist_ok=True)
     all_paths = set()
-    mp3_used = 0
-    flac_used = 0
+    resolved = 0
     for pid, p in state.items():
         name = p.get("name", "?")
         m3u_name = name.replace("/", "_")
-        ids = set(p.get("track_ids", []))
-        # Enrich incomplete playlists from old data
-        if not p.get("complete"):
-            key = "LIKES" if name in LIKES_ALIASES else name
-            ids |= old_name_to_ids.get(key, set())
-        # Map to library paths: prefer FLAC, fallback to verified MP3
-        paths = []
-        for tid in ids:
+        ordered, seen = [], set()
+        for tid in p.get("track_ids", []):
             rel = index.get(tid)
             if rel:
-                paths.append(("flac", f"../_library/{rel}"))
-                flac_used += 1
-            else:
-                mp3_abs = mp3_index.get(tid)
-                if mp3_abs:
-                    # M3U is at PLAY/<name>.m3u8; compute relative path to MP3.
-                    rel_path = os.path.relpath(mp3_abs, PLAY)
-                    paths.append(("mp3", rel_path))
-                    mp3_used += 1
-        # Write M3U (dedup paths; preserve order: FLAC entries first, then MP3)
-        seen = set()
-        ordered = []
-        for kind in ("flac", "mp3"):
-            for k, pth in paths:
-                if k == kind and pth not in seen:
+                pth = f"../_library/{rel}"
+                if pth not in seen:
                     seen.add(pth)
                     ordered.append(pth)
-        m3u = PLAY / f"{m3u_name}.m3u8"
-        with open(m3u, "w", encoding="utf-8") as f:
+                    resolved += 1
+        with open(PLAY / f"{m3u_name}.m3u8", "w", encoding="utf-8") as f:
             f.write("#EXTM3U\n")
-            for rel in ordered:
-                f.write(f"{rel}\n")
+            for pth in ordered:
+                f.write(f"{pth}\n")
         all_paths.update(ordered)
 
-    # "All Tracks" union — only paths actually referenced by some playlist M3U.
-    all_m3u = PLAY / "All Tracks.m3u8"
-    with open(all_m3u, "w", encoding="utf-8") as f:
+    with open(PLAY / "All Tracks.m3u8", "w", encoding="utf-8") as f:
         f.write("#EXTM3U\n")
-        for rel in sorted(all_paths):
-            f.write(f"{rel}\n")
-    print(f"  resolved tracks: {flac_used} via FLAC + {mp3_used} via MP3 fallback", file=sys.stderr)
-
+        for pth in sorted(all_paths):
+            f.write(f"{pth}\n")
+    print(f"  resolved {resolved} playlist entries", file=sys.stderr)
     print(f"  regenerated {len(state)} M3Us, All Tracks={len(all_paths)} paths", file=sys.stderr)
     return len(state), len(all_paths)
 

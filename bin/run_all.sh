@@ -1,11 +1,13 @@
 #!/bin/bash
-# Batch driver for spotiflac.
+# Batch driver for spotiflac — missing-only mode.
 #
-# Reads playlist URLs from $SPOTIFLAC_STATE_DIR/playlists.txt, skips IDs
-# already listed in done.txt, downloads each remaining playlist, parses the
-# session summary for failures, and triggers the migrate + verify hooks
-# after each successful playlist. Aborts after N consecutive all-failed
-# playlists so the watchdog can rotate to a different provider chain.
+# For each playlist in $SPOTIFLAC_STATE_DIR/playlists.txt not yet in done.txt,
+# fetch-missing.py enumerates the full track list, downloads ONLY tracks
+# absent from track-id-index.json, and maintains the permanent-failure
+# quarantine in unavailable.txt. A playlist is marked done when pending == 0
+# (everything present or quarantined) — so playlists with a few unobtainable
+# tracks no longer retry forever, and a +N-tracks playlist update costs N
+# downloads instead of a full re-run.
 
 set -u
 source "$(dirname "$0")/_common.sh"
@@ -19,19 +21,19 @@ MIGRATE_SCRIPT="$(dirname "$0")/migrate-to-flat.py"
 MIGRATE_LOG="$SPOTIFLAC_STATE_DIR/migrate.log"
 VERIFY_SCRIPT="$(dirname "$0")/verify-and-cleanup.py"
 VERIFY_LOG="$SPOTIFLAC_STATE_DIR/verify.log"
+FETCH_MISSING="$(dirname "$0")/fetch-missing.py"
 MAX_CONSECUTIVE_FAIL=3
 
 # Active provider chain. The watchdog writes this file when rotating; for a
 # standalone run we fall back to the first chain in SPOTIFLAC_PROVIDER_CHAINS.
 SPOTIFLAC_SERVICE="${SPOTIFLAC_PROVIDER_CHAINS%%,*}"
 [ -f "$SERVICE_CONF" ] && source "$SERVICE_CONF"
+export SPOTIFLAC_SERVICE
 
 if [ ! -f "$PLAYLIST_FILE" ]; then
     echo "Missing $PLAYLIST_FILE — add one Spotify playlist URL per line." >&2
     exit 2
 fi
-
-source "$SPOTIFLAC_VENV/bin/activate"
 
 mkdir -p "$SPOTIFLAC_OUTPUT_DIR"
 > "$FAILED_LOG"
@@ -64,7 +66,7 @@ ALL_FAILED=0
 CONSECUTIVE_FAIL=0
 EARLY_EXIT=0
 
-spf_notify "🎵 SpotiFlac batch started — $TOTAL playlist(s) to process via [$SPOTIFLAC_SERVICE] ($SKIPPED already done)."
+spf_notify "🎵 SpotiFlac batch started — $TOTAL playlist(s) to check via [$SPOTIFLAC_SERVICE] ($SKIPPED already done). Missing-only mode."
 
 while IFS= read -r url; do
     id="${url##*/}"
@@ -76,59 +78,62 @@ while IFS= read -r url; do
         break
     fi
 
-    tmp_out=$(mktemp)
-    spotiflac "$url" "$SPOTIFLAC_OUTPUT_DIR" \
-        --service $SPOTIFLAC_SERVICE \
-        --retries 2 \
-        --use-artist-subfolders \
-        --use-album-subfolders \
-        --quality LOSSLESS \
-        2>&1 | tee -a "$tmp_out" >> "$SPOTIFLAC_LOG"
+    tmp_res=$(mktemp)
+    "$SPOTIFLAC_VENV/bin/python3" "$FETCH_MISSING" "$url" > "$tmp_res" 2>> "$SPOTIFLAC_LOG"
+    fm_exit=$?
+    result_line=$(grep '^RESULT|' "$tmp_res" | tail -1)
+    qnew_names=$(grep '^QNEW|' "$tmp_res" | cut -d'|' -f2- | head -5 | sed 's/^/  ⛔ /')
+    rm -f "$tmp_res"
 
-    exit_code=${PIPESTATUS[0]}
-
-    failed_tracks=$(grep -oP '(?<=║    ).*(?=: All providers)' "$tmp_out" | sed 's/[[:space:]]*$//')
-    if [ -z "$failed_tracks" ]; then
-        failed_count=0
-    else
-        failed_count=$(printf '%s\n' "$failed_tracks" | grep -c .)
-    fi
-    # spotiflac's session summary box has two label sets: Italian (<=0.5.0)
-    # and English (>=0.5.1). Match both.
-    completed=$(grep -oP '(Completate|Successful)\s*:\s*\K[0-9]+' "$tmp_out" | tail -1)
-    total_tracks=$(grep -oP '(Tracce totali|Total Tracks)\s*:\s*\K[0-9]+' "$tmp_out" | tail -1)
-    : "${completed:=0}"
-    : "${total_tracks:=0}"
-    rm -f "$tmp_out"
-
-    if [ "$exit_code" -eq 0 ] && [ "$failed_count" -eq 0 ] && [ "$completed" -gt 0 ]; then
-        echo "$id" >> "$DONE_LOG"
-        SUCCESS=$((SUCCESS + 1))
-        CONSECUTIVE_FAIL=0
-        python3 "$MIGRATE_SCRIPT" >> "$MIGRATE_LOG" 2>&1
-        python3 "$VERIFY_SCRIPT" --clean >> "$VERIFY_LOG" 2>&1
-        spf_notify "✅ [$COUNT/$TOTAL] Done: $url ($completed/$total_tracks)"
-    elif [ "$completed" -gt 0 ] && [ -n "$failed_tracks" ]; then
-        echo "$id" >> "$DONE_LOG"
-        echo "=== $url ===" >> "$FAILED_LOG"
-        echo "$failed_tracks" >> "$FAILED_LOG"
-        echo "" >> "$FAILED_LOG"
-        PARTIAL=$((PARTIAL + 1))
-        CONSECUTIVE_FAIL=0
-        python3 "$MIGRATE_SCRIPT" >> "$MIGRATE_LOG" 2>&1
-        python3 "$VERIFY_SCRIPT" --clean >> "$VERIFY_LOG" 2>&1
-        fail_msg=$(echo "$failed_tracks" | head -10 | sed 's/^/  • /')
-        spf_notify "⚠️ [$COUNT/$TOTAL] Partial ($completed/$total_tracks, $failed_count failed): $url
-$fail_msg"
-    else
-        echo "=== $url ===" >> "$FAILED_LOG"
-        [ -n "$failed_tracks" ] && echo "$failed_tracks" >> "$FAILED_LOG"
-        echo "" >> "$FAILED_LOG"
+    if [ "$fm_exit" -ne 0 ] || [ -z "$result_line" ]; then
+        echo "=== $url === (enumeration/driver error, exit $fm_exit)" >> "$FAILED_LOG"
         ALL_FAILED=$((ALL_FAILED + 1))
         CONSECUTIVE_FAIL=$((CONSECUTIVE_FAIL + 1))
         if [ "$CONSECUTIVE_FAIL" -ge "$MAX_CONSECUTIVE_FAIL" ]; then
             EARLY_EXIT=1
             break
+        fi
+        continue
+    fi
+
+    IFS='|' read -r _ total have missing attempted ok failed q_new q_total pending name <<< "$result_line"
+
+    if [ "$ok" -gt 0 ]; then
+        python3 "$MIGRATE_SCRIPT" >> "$MIGRATE_LOG" 2>&1
+        python3 "$VERIFY_SCRIPT" --clean >> "$VERIFY_LOG" 2>&1
+    fi
+
+    if [ "$pending" -eq 0 ]; then
+        # everything present or quarantined -> done
+        grep -qFx "$id" "$DONE_LOG" || echo "$id" >> "$DONE_LOG"
+        CONSECUTIVE_FAIL=0
+        if [ "$q_total" -eq 0 ]; then
+            SUCCESS=$((SUCCESS + 1))
+            if [ "$attempted" -gt 0 ]; then
+                spf_notify "✅ [$COUNT/$TOTAL] $name: fetched $ok missing track(s) ($have/$total were already present)."
+            else
+                spf_notify "✅ [$COUNT/$TOTAL] $name: already complete ($total tracks, nothing missing)."
+            fi
+        else
+            PARTIAL=$((PARTIAL + 1))
+            echo "=== $url === quarantined: $q_total" >> "$FAILED_LOG"
+            spf_notify "⚠️ [$COUNT/$TOTAL] $name: done with $q_total unobtainable track(s) quarantined (fetched $ok new).
+$qnew_names
+(see unavailable.txt in the state dir — delete a line to retry)"
+        fi
+    else
+        echo "=== $url === pending: $pending after $attempted attempt(s)" >> "$FAILED_LOG"
+        if [ "$ok" -gt 0 ]; then
+            PARTIAL=$((PARTIAL + 1))
+            CONSECUTIVE_FAIL=0
+            spf_notify "⚠️ [$COUNT/$TOTAL] $name: fetched $ok, but $pending track(s) still failing (will retry next cycle)."
+        else
+            ALL_FAILED=$((ALL_FAILED + 1))
+            CONSECUTIVE_FAIL=$((CONSECUTIVE_FAIL + 1))
+            if [ "$CONSECUTIVE_FAIL" -ge "$MAX_CONSECUTIVE_FAIL" ]; then
+                EARLY_EXIT=1
+                break
+            fi
         fi
     fi
 
@@ -137,6 +142,6 @@ done <<< "$URLS"
 if [ "$EARLY_EXIT" -eq 1 ]; then
     summary="🛑 Batch aborted after $CONSECUTIVE_FAIL consecutive all-failed playlists via [$SPOTIFLAC_SERVICE]. ✅ $SUCCESS · ⚠️ $PARTIAL · ❌ $ALL_FAILED so far. Watchdog will retry."
 else
-    summary="🏁 Batch complete via [$SPOTIFLAC_SERVICE]. ✅ $SUCCESS · ⚠️ $PARTIAL partial · ❌ $ALL_FAILED all-failed"
+    summary="🏁 Batch complete via [$SPOTIFLAC_SERVICE]. ✅ $SUCCESS · ⚠️ $PARTIAL partial · ❌ $ALL_FAILED failed"
 fi
 spf_notify "$summary"

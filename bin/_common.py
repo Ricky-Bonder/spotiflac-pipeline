@@ -46,7 +46,6 @@ def _env_int(key: str, default: int) -> int:
 
 MUSIC_ROOT          = _env_path("SPOTIFLAC_MUSIC_ROOT",   "~/Music")
 OUTPUT_DIR          = _env_path("SPOTIFLAC_OUTPUT_DIR",   str(MUSIC_ROOT / "spotiflac"))
-SPOTDL_ROOT         = _env_path("SPOTIFLAC_SPOTDL_ROOT",  str(MUSIC_ROOT / "spotdl"))
 STATE_DIR           = _env_path("SPOTIFLAC_STATE_DIR",    "~/.local/state/spotiflac-pipeline")
 VENV                = _env_path("SPOTIFLAC_VENV",         "~/.local/share/spotiflac-pipeline/venv")
 
@@ -59,11 +58,8 @@ TELEGRAM_CHAT_ID    = os.environ.get("SPOTIFLAC_TELEGRAM_CHAT_ID", "")
 MIN_FREE_DISK_GB    = _env_int("SPOTIFLAC_MIN_FREE_DISK_GB", 50)
 MIN_FREE_MEM_MB     = _env_int("SPOTIFLAC_MIN_FREE_MEM_MB",  200)
 
-OLD_PLAYLISTS_JSON  = os.environ.get("SPOTIFLAC_OLD_PLAYLISTS_JSON", "")
-LIKES_ALIASES       = set(
-    a.strip() for a in os.environ.get("SPOTIFLAC_LIKES_ALIASES", "Liked Songs").split(",")
-    if a.strip()
-)
+MAX_TRACK_FAILS     = _env_int("SPOTIFLAC_MAX_TRACK_FAILS", 4)
+TRACK_TIMEOUT_S     = _env_int("SPOTIFLAC_TRACK_TIMEOUT_S", 420)
 
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 

@@ -13,10 +13,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Bash syntax (bin/*.sh + install.sh)
+      - name: Bash syntax (bin/*.sh + install.sh + docker/entrypoint.sh)
         run: |
           fail=0
-          for f in bin/*.sh install.sh; do
+          for f in bin/*.sh install.sh docker/entrypoint.sh; do
             if bash -n "$f"; then
               echo "  ok  $f"
             else
@@ -26,10 +26,10 @@ jobs:
           done
           exit "$fail"
 
-      - name: Python compile (bin/*.py)
+      - name: Python compile (bin/*.py + tools/*.py)
         run: |
           fail=0
-          for f in bin/*.py; do
+          for f in bin/*.py tools/*.py; do
             if python3 -m py_compile "$f"; then
               echo "  ok  $f"
             else
