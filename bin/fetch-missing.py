@@ -109,7 +109,10 @@ def main():
         sys.exit(2)
     seen, ordered = set(), []
     for t in tracks:
-        if t.id and t.id not in seen:
+        # Spotify LOCAL FILES appear in the enumeration with synthetic short
+        # ids ("96", "164", …) and no provider can ever deliver them — they
+        # are not catalog tracks. Only real 22-char base62 track ids count.
+        if t.id and re.fullmatch(r"[A-Za-z0-9]{22}", t.id) and t.id not in seen:
             seen.add(t.id)
             ordered.append(t)
     if not ordered:
