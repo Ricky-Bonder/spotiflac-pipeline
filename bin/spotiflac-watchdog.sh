@@ -98,7 +98,7 @@ log "tick: remaining=$remaining done=$done_count prev_attempts=$prev_attempts se
 
 if reason=$(maintenance_active); then
     log "deferring: $reason"
-    [ "$done_count" -gt "$prev_done_count" ] && prev_attempts=0
+    [ "$done_count" -gt "$prev_done_count" ] && { prev_attempts=0; rm -f "$SPOTIFLAC_STATE_DIR/exhaust.count"; }
     write_state "$done_count" "$prev_attempts" 0 "$service_idx"
     exit 0
 fi
@@ -138,7 +138,7 @@ fi
 if pgrep -f "$SCRIPT" >/dev/null || pgrep -f "$SPOTIFLAC_VENV/bin/spotiflac http" >/dev/null; then
     log "batch running"
     attempts=$prev_attempts
-    [ "$done_count" -gt "$prev_done_count" ] && attempts=0
+    [ "$done_count" -gt "$prev_done_count" ] && { attempts=0; rm -f "$SPOTIFLAC_STATE_DIR/exhaust.count"; }
     write_state "$done_count" "$attempts" 0 "$service_idx"
     exit 0
 fi
@@ -149,16 +149,23 @@ log "batch not running; remaining=$remaining attempt=$attempts service_idx=$serv
 if [ "$attempts" -gt "$MAX_RETRIES_PER_SERVICE" ] && [ "$done_count" -le "$prev_done_count" ]; then
     next_idx=$((service_idx + 1))
     if [ "$next_idx" -ge "${#SERVICE_OPTIONS[@]}" ]; then
-        spf_notify "🚨 spotiflac-pipeline: tried all ${#SERVICE_OPTIONS[@]} provider chains with no progress. Pausing 1 h. $remaining playlist(s) still pending."
-        log "full rotation exhausted; pausing 1 h"
-        write_state "$done_count" 0 $((now + PAUSE_AFTER_FULL_ROTATION_SECONDS)) 0
+        # Exponential backoff: 1h, 2h, 4h … capped at 24h. One 🚨 per streak —
+        # the counter resets when a batch makes progress.
+        exhaust_count=$(cat "$SPOTIFLAC_STATE_DIR/exhaust.count" 2>/dev/null || echo 0)
+        pause_s=$(( PAUSE_AFTER_FULL_ROTATION_SECONDS * (1 << (exhaust_count > 4 ? 4 : exhaust_count)) ))
+        [ "$pause_s" -gt 86400 ] && pause_s=86400
+        if [ "$exhaust_count" -eq 0 ]; then
+            spf_notify "🚨 spotiflac-pipeline: tried all ${#SERVICE_OPTIONS[@]} provider chains with no progress. Backing off (next 🚨 only if failures persist through growing pauses). $remaining playlist(s) pending."
+        fi
+        echo $((exhaust_count + 1)) > "$SPOTIFLAC_STATE_DIR/exhaust.count"
+        log "full rotation exhausted; pausing ${pause_s}s (streak $((exhaust_count + 1)))"
+        write_state "$done_count" 0 $((now + pause_s)) 0
         write_service_conf 0
         exit 0
     fi
     service_idx=$next_idx
     attempts=1
     write_service_conf "$service_idx"
-    spf_notify "🔄 spotiflac-pipeline: no progress on previous chain — rotating to [${SERVICE_OPTIONS[$service_idx]}]"
     log "rotated to service_idx=$service_idx (${SERVICE_OPTIONS[$service_idx]})"
 fi
 

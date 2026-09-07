@@ -66,7 +66,6 @@ ALL_FAILED=0
 CONSECUTIVE_FAIL=0
 EARLY_EXIT=0
 
-spf_notify "🎵 SpotiFlac batch started — $TOTAL playlist(s) to check via [$SPOTIFLAC_SERVICE] ($SKIPPED already done). Missing-only mode."
 
 while IFS= read -r url; do
     id="${url##*/}"
@@ -112,12 +111,12 @@ while IFS= read -r url; do
             if [ "$attempted" -gt 0 ]; then
                 spf_notify "✅ [$COUNT/$TOTAL] $name: fetched $ok missing track(s) ($have/$total were already present)."
             else
-                spf_notify "✅ [$COUNT/$TOTAL] $name: already complete ($total tracks, nothing missing)."
+                : # silent — no-op completions are not worth a notification ("✅ [$COUNT/$TOTAL] $name: already complete ($total tracks, nothing missing).")
             fi
         else
             PARTIAL=$((PARTIAL + 1))
             echo "=== $url === quarantined: $q_total" >> "$FAILED_LOG"
-            spf_notify "⚠️ [$COUNT/$TOTAL] $name: done with $q_total unobtainable track(s) quarantined (fetched $ok new).
+            [ "$q_new" -gt 0 ] || [ "$ok" -gt 0 ] && spf_notify "⚠️ [$COUNT/$TOTAL] $name: done with $q_total unobtainable track(s) quarantined (fetched $ok new).
 $qnew_names
 (see unavailable.txt in the state dir — delete a line to retry)"
         fi
@@ -139,9 +138,9 @@ $qnew_names
 
 done <<< "$URLS"
 
-if [ "$EARLY_EXIT" -eq 1 ]; then
-    summary="🛑 Batch aborted after $CONSECUTIVE_FAIL consecutive all-failed playlists via [$SPOTIFLAC_SERVICE]. ✅ $SUCCESS · ⚠️ $PARTIAL · ❌ $ALL_FAILED so far. Watchdog will retry."
-else
-    summary="🏁 Batch complete via [$SPOTIFLAC_SERVICE]. ✅ $SUCCESS · ⚠️ $PARTIAL partial · ❌ $ALL_FAILED failed"
+# Notify only when the batch actually did something (downloads or state
+# changes). Silent no-progress runs and aborts: the watchdog escalates those
+# with backoff instead of a message every cycle.
+if [ "$((SUCCESS + PARTIAL))" -gt 0 ]; then
+    spf_notify "🏁 Batch via [$SPOTIFLAC_SERVICE]: ✅ $SUCCESS · ⚠️ $PARTIAL partial · ❌ $ALL_FAILED failed"
 fi
-spf_notify "$summary"
