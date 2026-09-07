@@ -109,7 +109,7 @@ Two defenses:
        defer? (backup mounted, rsync, configured proc) ── yes ──► exit
                                   │ no
               ┌───────────────────┴───────────────────┐
-              │  all playlists done? ── yes ──► notify + remove self from cron
+              │  all playlists done? ── yes ──► 🎉 once, then idle quietly each tick
               │                                       │
               │  paused? (pause-until in future) ── yes ──► exit
               │                                       │

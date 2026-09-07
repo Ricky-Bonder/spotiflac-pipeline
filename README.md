@@ -120,7 +120,10 @@ bin/run_all.sh
 
 Install the cron entries from [`examples/crontab.example`](examples/crontab.example).
 The watchdog handles everything from there — provider rotation, resource
-monitoring, self-shutdown on completion.
+monitoring, quiet idling once everything is done (it wakes again whenever
+the daily diff detects playlist changes). Notifications are event-driven:
+downloads, new quarantines, playlist changes, resource warnings — never
+routine batch chatter.
 
 ### Run in Docker (experimental)
 

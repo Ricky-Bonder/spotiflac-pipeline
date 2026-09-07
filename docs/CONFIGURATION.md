@@ -54,7 +54,9 @@ its argv is detected — no config needed.
 
 When the active chain produces no progress over `MAX_RETRIES_PER_SERVICE` (3)
 watchdog ticks, the watchdog rotates to the next chain. After exhausting all
-chains, it pauses for 1 h and starts over.
+chains, it backs off exponentially (1 h → 2 h → 4 h … capped at 24 h),
+sending a single 🚨 per failure streak; the backoff resets as soon as a
+batch makes progress.
 
 With spotiflac ≥3.8 these aliases resolve to installed JS extensions
 (`deezer` → `ext:deezer`, `tidal` → `ext:tidal-web`, …). As of late 2026
