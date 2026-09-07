@@ -9,7 +9,7 @@ This document explains *why* the pipeline looks the way it does. For the
 |---|---|---|
 | `bin/run_all.sh` | Per-batch driver: iterate playlists, delegate each to `fetch-missing.py`, hook post-success migrate + verify, mark done when pending == 0 | manual, or kicked by watchdog |
 | `bin/fetch-missing.py` | Enumerate a playlist's full track list (metadata client), download only IDs absent from the index, maintain the `unavailable.txt` quarantine | called by `run_all.sh` |
-| `bin/spotiflac-watchdog.sh` | Keeps `run_all.sh` alive, rotates provider chains, defers to backups, self-disables when done | cron `*/15 * * * *` |
+| `bin/spotiflac-watchdog.sh` | Keeps `run_all.sh` alive, rotates provider chains, defers to backups, idles when done, resumes on playlist changes | cron `*/15 * * * *` |
 | `bin/migrate-to-flat.py` | Flatten per-playlist subdirs → `_library/<Artist>/<Album>/`, maintain a persistent Spotify-ID index, regenerate M3Us | post-success hook from `run_all.sh` |
 | `bin/verify-and-cleanup.py` | Compare every FLAC's duration to Spotify's reported duration; flag/delete misroutes; regenerate affected M3Us | post-success hook + weekly cron |
 | `bin/spotify-diff.py` | Enumerate each playlist's FULL track list (metadata client, embed fallback); detect adds/removes; unmark playlist from `done.txt` if changed | daily cron |

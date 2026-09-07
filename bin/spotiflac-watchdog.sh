@@ -1,7 +1,7 @@
 #!/bin/bash
 # Runs every 15 min via cron. Keeps run_all.sh alive until every playlist is
 # done, rotates provider chain when no progress, alerts on resource pressure,
-# defers to backups, and self-disables when the batch is complete.
+# defers to backups, and idles quietly when everything is done (stays resident so playlist changes get picked up).
 
 set -u
 source "$(dirname "$0")/_common.sh"
@@ -104,12 +104,17 @@ if reason=$(maintenance_active); then
 fi
 
 if [ "$remaining" -eq 0 ]; then
-    spf_notify "🎉 spotiflac-pipeline: all $done_count playlists complete. Watchdog removing itself from cron."
-    log "complete; removing cron entry"
-    (crontab -l 2>/dev/null | grep -v 'spotiflac-watchdog.sh') | crontab -
-    rm -f "$STATE_FILE" "$SERVICE_CONF"
+    # Stay resident: the daily diff re-queues playlists when they change on
+    # Spotify, and this same cron entry must be alive to pick that up.
+    if [ ! -f "$SPOTIFLAC_STATE_DIR/all-done.flag" ]; then
+        spf_notify "🎉 spotiflac-pipeline: all $done_count playlists complete. Staying on watch for playlist changes."
+        touch "$SPOTIFLAC_STATE_DIR/all-done.flag"
+    fi
+    rm -f "$SPOTIFLAC_STATE_DIR/exhaust.count"
+    log "all playlists done; idle"
     exit 0
 fi
+rm -f "$SPOTIFLAC_STATE_DIR/all-done.flag"
 
 now=$(date +%s)
 if [ "$now" -lt "$paused_until" ]; then
