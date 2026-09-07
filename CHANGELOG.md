@@ -17,6 +17,22 @@ not a per-day snapshot.
   of the other provider proxies come back to life.
 
 
+## [0.8.0] — 2026-09-07
+
+### Added
+
+- **Published Docker image**: `ghcr.io/ricky-bonder/spotiflac-pipeline`
+  built and pushed by GitHub Actions on every main push touching the
+  runtime. The image bakes Node 22, Xvfb + Chromium, ffmpeg and — the key
+  part — **version-pinned deezer/tidal-web extensions** known to match the
+  PyPI module's bridge, so a fresh container downloads FLACs with zero
+  extension/registry setup. Verified end-to-end: container boot → real
+  Deezer FLAC in 35 s using only baked components.
+- Entrypoint hardening: config exported into the environment (spotiflac
+  reads its own vars from there), `HOME` moved into the /state volume so
+  sessions/extensions persist, pinned extensions seeded on first run only
+  (user-pinned versions are never overwritten).
+
 ## [0.7.0] — 2026-09-02
 
 Library maintenance toolkit, grown while consolidating three generations of

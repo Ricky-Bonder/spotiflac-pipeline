@@ -37,6 +37,23 @@ RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir \
         "spotiflac>=3.8,<4" "yt-dlp>=2024.0" "mutagen>=1.47"
 
+# Bake KNOWN-COMPATIBLE extensions (pinned by commit in the extension store).
+# The registry serves builds for the newer mobile-app runtime; the PyPI
+# module bridge lags behind, so out-of-the-box we pin versions whose
+# requiredRuntimeFeatures the bridge actually implements. No registry is
+# configured by default — the startup bootstrap would force-update the pin.
+ARG EXT_REPO=https://raw.githubusercontent.com/zarzet/SpotiFLAC-Extension
+ARG EXT_DEEZER_COMMIT=923d942
+ARG EXT_TIDAL_COMMIT=2ed5d99
+RUN apt-get update && apt-get install -y --no-install-recommends unzip \
+    && mkdir -p /opt/default-extensions/deezer /opt/default-extensions/tidal-web \
+    && curl -fsSL "$EXT_REPO/$EXT_DEEZER_COMMIT/extensions/deezer.sflx" -o /tmp/d.sflx \
+    && curl -fsSL "$EXT_REPO/$EXT_TIDAL_COMMIT/extensions/tidal-web.sflx" -o /tmp/t.sflx \
+    && unzip -o /tmp/d.sflx -d /opt/default-extensions/deezer \
+    && unzip -o /tmp/t.sflx -d /opt/default-extensions/tidal-web \
+    && rm /tmp/d.sflx /tmp/t.sflx \
+    && apt-get purge -y unzip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
 COPY bin/   /app/bin/
 COPY tools/ /app/tools/
 COPY docker/entrypoint.sh /app/entrypoint.sh

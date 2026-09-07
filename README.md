@@ -125,12 +125,17 @@ monitoring, self-shutdown on completion.
 ### Run in Docker (experimental)
 
 `docker/` bundles the whole runtime — Python, Node 22, Xvfb, Chromium,
-ffmpeg — behind a scheduler entrypoint that mirrors the crontab cadence:
+ffmpeg, and **pre-pinned compatible extensions** (deezer + tidal-web) —
+behind a scheduler entrypoint that mirrors the crontab cadence. Downloads
+work out of the box, no registry setup needed:
 
 ```bash
-docker build -f docker/Dockerfile -t spotiflac-pipeline .
-# then adapt docker/docker-compose.example.yml (music/state/config volumes)
+docker pull ghcr.io/ricky-bonder/spotiflac-pipeline:latest
+# adapt docker/docker-compose.example.yml (music/state/config volumes),
+# drop playlist URLs into state/playlists.txt — done.
 ```
+
+Or build locally: `docker build -f docker/Dockerfile -t spotiflac-pipeline .`
 
 ---
 
