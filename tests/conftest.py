@@ -37,3 +37,8 @@ def verify():
 @pytest.fixture(scope="session")
 def migrate():
     return _load("migrate_to_flat", "migrate-to-flat.py")
+
+
+@pytest.fixture(scope="session")
+def diff():
+    return _load("spotify_diff", "spotify-diff.py")

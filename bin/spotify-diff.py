@@ -9,6 +9,9 @@
 #               isn't referenced by any other M3U, delete it too.
 #
 # Notes:
+# - Sanity guards (0.8.1): empty fetches and mass drops (>50%, >5 tracks)
+#   are rejected with no state, M3U or file changes; embed-capped fetches
+#   keep the last full track list.
 # - Embed caps at 100 tracks. For larger playlists we fall back to count-only
 #   sync (additions only via count delta).
 
@@ -223,6 +226,7 @@ def main():
     errors = []
     new_state = {}
     over_cap = []      # playlists too big for embed
+    suspicious = []    # (name, reason) — fetches rejected by the sanity guards
     for pid in pids:
         try:
             info = fetch_playlist(pid)
@@ -233,22 +237,50 @@ def main():
         prev = state.get(pid, {})
         prev_ids = set(prev.get("track_ids", []))
         cur_ids = set(info["track_ids"])
+        if info["name"] in ("?", "Unknown Playlist", "") and prev.get("name"):
+            info["name"] = prev["name"]
 
-        if info["complete"]:
-            added = cur_ids - prev_ids
-            removed = prev_ids - cur_ids
-            if removed and prev.get("complete"):
-                deletions.append((pid, info["name"], removed))
-            if added and prev_ids and prev.get("complete"):
-                additions.append((pid, info["name"], len(added)))
-            elif not prev_ids:
-                pass  # first run, nothing to compare
-        else:
+        # --- sanity guards (2026-11-24) -------------------------------------
+        # A 504 on the GraphQL client + an empty embed page used to look like a
+        # "complete" playlist with 0 tracks -> every track counted as deleted,
+        # M3Us emptied and orphaned files unlinked. The emptied snapshot then
+        # also swallowed the tracks' return (treated as "first run"), so
+        # nothing was re-queued — including Spotify track-ID relinks.
+        # Rule: a bad fetch never touches state, M3Us or files.
+        if info["complete"] and not cur_ids and prev_ids:
+            suspicious.append((info["name"], "empty track list"))
+            new_state[pid] = prev
+            continue
+        if info["complete"] and prev_ids and prev.get("complete"):
+            removed_n = len(prev_ids - cur_ids)
+            if removed_n > max(5, len(prev_ids) // 2):
+                suspicious.append((info["name"], f"would drop {removed_n}/{len(prev_ids)} tracks"))
+                new_state[pid] = prev
+                continue
+        # Incomplete (embed-capped) fetch: keep the last full track list so the
+        # next successful full fetch diffs against real data, not [].
+        if not info["complete"]:
             over_cap.append(pid)
-            # fallback to count-only
             prev_total = prev.get("total")
             if prev_total is not None and info["total"] is not None and info["total"] > prev_total:
                 additions.append((pid, info["name"], info["total"] - prev_total))
+            new_state[pid] = prev if prev_ids else {
+                "name": info["name"], "total": info["total"],
+                "track_ids": [], "complete": False}
+            if prev_ids and info["total"] is not None:
+                new_state[pid] = {**prev, "total": max(prev.get("total") or 0, info["total"])}
+            time.sleep(0.3)
+            continue
+        # ---------------------------------------------------------------------
+
+        added = cur_ids - prev_ids
+        removed = prev_ids - cur_ids
+        if removed and prev.get("complete"):
+            deletions.append((pid, info["name"], removed))
+        if added and pid in state:
+            # known playlist: re-queue even if the stored list was empty/partial
+            # (an empty snapshot is NOT a first run — that bug hid relinked ids).
+            additions.append((pid, info["name"], len(added)))
 
         new_state[pid] = {
             "name": info["name"],
@@ -313,6 +345,10 @@ def main():
             lines.append(f"  cleaned: {deleted_m3u_lines} M3U lines, {deleted_files} orphaned FLAC(s)")
     if errors:
         lines.append(f"⚠️ {len(errors)} scrape error(s)")
+    if suspicious:
+        lines.append(f"🛡️ {len(suspicious)} fetch(es) rejected by sanity guard (state/files untouched):")
+        for name, why in suspicious[:8]:
+            lines.append(f"  ! {name}: {why}")
     if over_cap:
         lines.append(f"ℹ️  {len(over_cap)} playlist(s) > {EMBED_CAP} tracks → additions-only (count delta)")
     if not lines:
@@ -320,7 +356,7 @@ def main():
     else:
         msg = "SpotiFLAC diff:\n" + "\n".join(lines)
     print(msg)
-    if additions or deletions:
+    if additions or deletions or suspicious:
         send_telegram(msg)
 
     if errors:

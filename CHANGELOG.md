@@ -17,6 +17,28 @@ not a per-day snapshot.
   of the other provider proxies come back to life.
 
 
+## [0.8.1] — 2026-11-24
+
+### Fixed
+
+- **spotify-diff false deletions.** A GraphQL 504 followed by an empty
+  embed page looked like a complete playlist with zero tracks: every track
+  was counted as deleted, the M3U was emptied and orphaned files were
+  unlinked. The diff now rejects an empty fetch, and any fetch that would
+  drop more than half a playlist (and more than 5 tracks), without touching
+  state, M3Us or files, and reports it as a sanity-guard event.
+- **Lost re-queues after an emptied snapshot.** A known playlist whose stored
+  track list was empty was treated as a first run, so returning tracks and
+  Spotify track-ID relinks were never re-queued. Any new track id on a known
+  playlist now re-queues it.
+- **Embed-capped fallback wiped the stored list.** When a >100-track playlist
+  fell back to the embed scrape, its full track list was overwritten with
+  , blinding the next full diff. The last full list is now kept.
+
+Recovery after upgrading, if you were hit: run  (prunes
+index entries whose files were deleted and regenerates M3Us), then remove
+affected playlists from  so  refetches them.
+
 ## [0.8.0] — 2026-09-07
 
 ### Added
