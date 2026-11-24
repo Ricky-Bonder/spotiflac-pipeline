@@ -33,11 +33,11 @@ not a per-day snapshot.
   playlist now re-queues it.
 - **Embed-capped fallback wiped the stored list.** When a >100-track playlist
   fell back to the embed scrape, its full track list was overwritten with
-  , blinding the next full diff. The last full list is now kept.
+  `[]`, blinding the next full diff. The last full list is now kept.
 
-Recovery after upgrading, if you were hit: run  (prunes
+Recovery after upgrading, if you were hit: run `migrate-to-flat.py` (prunes
 index entries whose files were deleted and regenerates M3Us), then remove
-affected playlists from  so  refetches them.
+affected playlists from `done.txt` so `fetch-missing.py` refetches them.
 
 ## [0.8.0] — 2026-09-07
 
